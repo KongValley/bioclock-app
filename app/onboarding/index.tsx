@@ -847,6 +847,18 @@ export default function OnboardingScreen() {
           该病种暂未收录药物，请用上方的自定义录入。
         </Text>
       }
+      ListFooterComponent={
+        <Text
+          style={{
+            color: theme.colors.textTertiary,
+            fontSize: theme.fontSize.xs,
+            lineHeight: theme.lineHeight.xs,
+            paddingTop: theme.spacing.md,
+          }}
+        >
+          同一通用名下的国产药（生物类似药）药效相同，选任意一个品牌都能用。若你的品牌没列出来，按通用名选即可，或用上方的自定义录入。
+        </Text>
+      }
     />
   )
 
