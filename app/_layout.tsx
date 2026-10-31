@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
 import { Stack } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
+import { GestureHandlerRootView } from 'react-native-gesture-handler'
+import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { initDatabase } from '@/db'
 import { ThemeProvider, useTheme } from '@/ui/theme'
 import { zh } from '@/i18n/zh'
@@ -46,7 +48,7 @@ function BootScreen({ error, onRetry }: { error: string | null; onRetry: () => v
 function RootNavigator() {
   const theme = useTheme()
   return (
-    <>
+    <SafeAreaProvider>
       <StatusBar style={theme.isDark ? 'light' : 'dark'} />
       <Stack
         screenOptions={{
@@ -56,7 +58,7 @@ function RootNavigator() {
       >
         <Stack.Screen name="(tabs)" />
       </Stack>
-    </>
+    </SafeAreaProvider>
   )
 }
 
@@ -88,13 +90,18 @@ export default function RootLayout() {
   const retry = useCallback(() => setAttempt((value) => value + 1), [])
 
   return (
-    <ThemeProvider>
-      {state === 'ready' ? <RootNavigator /> : <BootScreen error={error} onRetry={retry} />}
-    </ThemeProvider>
+    <GestureHandlerRootView style={styles.root}>
+      <ThemeProvider>
+        {state === 'ready' ? <RootNavigator /> : <BootScreen error={error} onRetry={retry} />}
+      </ThemeProvider>
+    </GestureHandlerRootView>
   )
 }
 
 const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+  },
   screen: {
     flex: 1,
     alignItems: 'center',
