@@ -51,18 +51,19 @@ async function readUserVersion(db: SQLite.SQLiteDatabase): Promise<number> {
 async function migrate(db: SQLite.SQLiteDatabase, fromVersion: number): Promise<void> {
   let version = fromVersion
 
-  if (version < 1) {
+  // 全新建库：CREATE_TABLES_SQL 已包含所有最新列，
+  // 直接建表并标记为最新版本，不能进入增量迁移分支（否则会重复加列）。
+  if (version === 0) {
     await db.execAsync(CREATE_TABLES_SQL)
-    version = 1
+    await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`)
+    return
   }
 
+  // 旧库升级：v1 -> v2，药物表补 route / disease_ids / catalog_key。
   if (version < 2) {
     await db.execAsync(MIGRATION_2_SQL)
     version = 2
   }
-
-  // 后续结构变更在此追加：
-  // if (version < 3) { ...; version = 3 }
 
   await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`)
 }
