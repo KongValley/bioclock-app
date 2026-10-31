@@ -1,0 +1,240 @@
+/**
+ * 简体中文文案集中表。
+ * 所有用户可见文案都应从这里取，避免散落在组件里。
+ */
+
+export const SYMPTOM_TAGS = [
+  '注射部位红肿',
+  '注射部位硬结',
+  '发热',
+  '乏力',
+  '皮疹',
+  '关节痛',
+  '头痛',
+  '恶心',
+  '腹泻',
+  '瘙痒',
+] as const
+
+export type SymptomTag = (typeof SYMPTOM_TAGS)[number]
+
+export const zh = {
+  appName: 'BioClock',
+
+  tabs: {
+    today: '今天',
+    history: '记录',
+    trends: '趋势',
+    settings: '设置',
+  },
+
+  common: {
+    appTitle: 'BioClock',
+    loading: '正在加载…',
+    loadFailed: '数据加载失败',
+    retry: '重试',
+    save: '保存',
+    cancel: '取消',
+    confirm: '确定',
+    delete: '删除',
+    edit: '编辑',
+    close: '关闭',
+    back: '返回',
+    next: '下一步',
+    previous: '上一步',
+    done: '完成',
+    add: '新增',
+    unknown: '未知',
+    optional: '选填',
+    notSet: '未设置',
+    unitMg: 'mg',
+    unitMl: 'ml',
+    unitDay: '天',
+    unitWeek: '周',
+  },
+
+  empty: {
+    todayNoRegimen: '还没有用药方案，先去设置里添加一个',
+    todayNoInjection: '还没有注射记录，打完针后在这里登记',
+    historyNoInjection: '暂无注射记录',
+    historyNoSymptom: '暂无症状记录',
+    trendsNoData: '记录满两次注射后，这里会显示趋势',
+    settingsNoReminder: '尚未设置提醒',
+  },
+
+  today: {
+    title: '今天',
+    countdownPrefix: '距下次注射还有',
+    countdownToday: '今天该注射了',
+    overduePrefix: '已逾期',
+    lastInjection: '上次注射',
+    nextInjection: '下次注射',
+    registerInjection: '登记注射',
+    recommendedSite: '推荐注射部位',
+    rotateHint: '建议轮换注射部位，腹部需距脐 5cm 以上',
+    quickLogSymptom: '记录症状',
+    noSchedule: '暂无排程',
+  },
+
+  history: {
+    title: '记录',
+    injectionTab: '注射',
+    symptomTab: '症状',
+    addInjection: '新增注射',
+    addSymptom: '新增症状',
+    deleteInjectionTitle: '删除这条注射记录？',
+    deleteInjectionMessage: '删除后下次注射时间会重新计算，此操作不可恢复。',
+    deleteSymptomTitle: '删除这条症状记录？',
+    deleteSymptomMessage: '此操作不可恢复。',
+  },
+
+  trends: {
+    title: '趋势',
+    adherence: '依从性',
+    onTime: '按时',
+    early: '提前',
+    late: '延迟',
+    avgDeviation: '平均偏差',
+    currentStreak: '连续按时',
+    symptomTimeline: '症状与注射时间线',
+    correlationNote: '仅用于自我观察，不构成因果判断。',
+  },
+
+  settings: {
+    title: '设置',
+    regimenSection: '用药方案',
+    regimenName: '方案名称',
+    medication: '药物',
+    anchor: '排程锚点',
+    anchorActual: '按实际注射时间（推荐）',
+    anchorPlanned: '按计划时间',
+    windowDays: '按时窗口（±天）',
+    phases: '剂量阶段',
+    addPhase: '添加阶段',
+    phaseKind: '阶段类型',
+    phaseLoading: '负荷剂量',
+    phaseMaintenance: '维持剂量',
+    intervalDays: '间隔天数',
+    repeatCount: '重复次数（0 表示无限）',
+    dose: '剂量',
+    reminderSection: '提醒',
+    reminderEnabled: '开启提醒',
+    reminderOffsets: '提前提醒天数',
+    reminderTime: '提醒时间',
+    snoozeMinutes: '稍后提醒（分钟）',
+    securitySection: '隐私与安全',
+    appLock: '应用锁',
+    appLockHint: '使用指纹或面容解锁 BioClock',
+    theme: '外观',
+    themeSystem: '跟随系统',
+    themeLight: '浅色',
+    themeDark: '深色',
+    exportSection: '数据',
+    exportCsv: '导出 CSV',
+    exportPdf: '导出 PDF 就诊报告',
+    clearData: '清空全部数据',
+    clearDataTitle: '清空全部数据？',
+    clearDataMessage: '所有注射、症状和方案都会被删除，且无法恢复。内置药物会保留。',
+    aboutSection: '关于',
+    disclaimer: '免责声明',
+    version: '版本',
+  },
+
+  onboarding: {
+    welcomeTitle: '欢迎使用 BioClock',
+    welcomeSubtitle: '记录每一次注射，按时提醒，不再靠记忆。',
+    start: '开始设置',
+    chooseMedication: '选择你正在使用的药物',
+    customMedication: '自定义药物',
+    medicationName: '药物名称',
+    genericName: '通用名',
+    defaultDose: '默认剂量',
+    unit: '单位',
+    regimenName: '给方案起个名字',
+    intervalTitle: '注射间隔',
+    intervalHint: '按医嘱填写，例如每 4 周一次',
+    loadingDoseTitle: '是否有负荷剂量？',
+    loadingDoseHint: '例如第 0、1、2 周各一次，之后每 12 周维持',
+    reminderTitle: '设置提醒时间',
+    reminderHint: '到点前会发一条本地通知，不会联网。',
+    finish: '完成',
+  },
+
+  form: {
+    injectedAt: '注射时间',
+    loggedAt: '记录时间',
+    medicationName: '药物',
+    dose: '剂量',
+    unit: '单位',
+    site: '注射部位',
+    lotNumber: '批次号',
+    note: '备注',
+    severity: '严重程度',
+    severity1: '很轻',
+    severity2: '较轻',
+    severity3: '中等',
+    severity4: '较重',
+    severity5: '严重',
+    symptomTags: '症状',
+    temperature: '体温（℃）',
+    relatedInjection: '关联注射',
+    patientName: '姓名',
+    patientBirthYear: '出生年份',
+    rangeDays: '时间范围',
+    rangeDaysValue: '{days} 天',
+  },
+
+  sites: {
+    abdomen_ul: '腹部左上',
+    abdomen_ur: '腹部右上',
+    abdomen_ll: '腹部左下',
+    abdomen_lr: '腹部右下',
+    thigh_l: '左大腿',
+    thigh_r: '右大腿',
+    arm_l: '左上臂',
+    arm_r: '右上臂',
+  },
+
+  symptomTags: SYMPTOM_TAGS,
+
+  status: {
+    done: '已完成',
+    due: '该注射了',
+    upcoming: '待注射',
+    overdue: '已逾期',
+    onTime: '按时',
+    early: '提前',
+    late: '延迟',
+  },
+
+  disclaimer: {
+    title: '免责声明',
+    short: '本应用仅用于个人记录与提醒，不提供诊断、治疗或用药建议。',
+    body:
+      'BioClock 是一个个人健康记录工具，用于记录注射时间、提醒下次注射并整理症状。\n\n' +
+      '本应用不提供任何医学诊断、治疗方案、剂量调整或用药建议。所有用药方案、剂量与注射间隔均应由你与医生共同确定，并严格遵照医嘱执行。\n\n' +
+      '应用内的时间推算与提醒仅供参考，可能因设备时间、系统限制或设置变更而出现偏差。请勿仅依据本应用决定是否用药。\n\n' +
+      '如有任何身体不适或用药疑问，请及时咨询专业医疗人员。',
+    accept: '我已阅读并理解',
+    acceptedAt: '免责声明确认时间',
+    exportWarning: '该文件包含你的健康信息，请谨慎分享。',
+  },
+
+  notify: {
+    prepareHint: '请提前 30 分钟取出冷藏药，回温后再注射。',
+    dueToday: '今天该注射了',
+    dueTomorrow: '明天该注射了，别忘了提前取出冷藏药',
+    dueInDays: '还有 {days} 天该注射了（{medication} {dose}）',
+    overdue: '已逾期 {days} 天',
+    supplement: '今天还没登记注射，别忘了',
+  },
+
+  errors: {
+    generic: '操作失败，请稍后再试',
+    notFound: '记录不存在',
+    invalidInput: '输入内容不合法',
+    database: '数据库操作失败',
+  },
+} as const
+
+export default zh
