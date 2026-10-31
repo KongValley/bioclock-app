@@ -17,6 +17,7 @@ import Constants from 'expo-constants'
 import * as LocalAuthentication from 'expo-local-authentication'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useTheme } from '@/ui/theme'
+import type { ThemeMode } from '@/ui/theme'
 import { zh } from '@/i18n/zh'
 import { useAppStore, errorMessage } from '@/store/app'
 import { resetDatabase } from '@/db'
@@ -34,6 +35,7 @@ import { Icon } from '@/ui/components/Icon'
 import { Screen, ScreenHeader, ScrollArea, SectionTitle } from '@/ui/components/Layout'
 import { StateView } from '@/ui/components/StateView'
 import { SymptomTagManager } from '@/ui/components/SymptomFields'
+import { SegmentedControl } from '@/ui/components/SegmentedControl'
 import { TimeOfDayField } from '@/ui/components/TimeField'
 import { toast, ToastHost } from '@/ui/components/Toast'
 import { formatDate } from '@/ui/components/date'
@@ -276,6 +278,25 @@ export default function SettingsScreen() {
   const [tagManagerOpen, setTagManagerOpen] = useState(false)
 
   const [lockBusy, setLockBusy] = useState(false)
+  const [themeSaving, setThemeSaving] = useState(false)
+
+  const themeMode: ThemeMode =
+    settings.theme_mode === 'light' || settings.theme_mode === 'dark'
+      ? settings.theme_mode
+      : 'system'
+
+  const changeThemeMode = async (mode: ThemeMode) => {
+    if (mode === themeMode || themeSaving) return
+    setThemeSaving(true)
+    try {
+      const result = await updateSettings({ theme_mode: mode })
+      if (result.notifyWarning) toast(result.notifyWarning, 'error')
+    } catch (error) {
+      toast(errorMessage(error), 'error')
+    } finally {
+      setThemeSaving(false)
+    }
+  }
 
   const [pdfOpen, setPdfOpen] = useState(false)
   const [patientName, setPatientName] = useState('')
@@ -830,6 +851,27 @@ export default function SettingsScreen() {
             disabled={lockBusy}
             last
           />
+        </RowGroup>
+
+        <SectionTitle title={zh.settings.theme} hint="跟随系统时，手机切换深色模式会立即生效" />
+        <RowGroup>
+          <View style={{ padding: theme.spacing.lg, gap: theme.spacing.sm }}>
+            <SegmentedControl<ThemeMode>
+              options={[
+                { value: 'system', label: zh.settings.themeSystem },
+                { value: 'light', label: zh.settings.themeLight },
+                { value: 'dark', label: zh.settings.themeDark },
+              ]}
+              value={themeMode}
+              onChange={(mode) => {
+                void changeThemeMode(mode)
+              }}
+              accessibilityLabel={zh.settings.theme}
+            />
+            <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.xs }}>
+              仅影响界面配色，不影响提醒与数据。
+            </Text>
+          </View>
         </RowGroup>
 
         <SectionTitle title={zh.settings.exportSection} hint={zh.disclaimer.exportWarning} />

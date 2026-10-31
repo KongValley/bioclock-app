@@ -72,40 +72,44 @@ export function PainScale({
         </Text>
       </View>
 
-      <View style={styles.grid}>
-        {scores.map((score) => {
-          const selected = value === score
-          const color = colorOf(painBand(score))
-          return (
-            <Pressable
-              key={score}
-              accessibilityRole="button"
-              accessibilityLabel={`疼痛评分 ${score}，${labelOf(painBand(score))}`}
-              accessibilityState={{ selected }}
-              onPress={() => onChange(selected ? null : score)}
-              style={({ pressed }) => [
-                styles.cell,
-                {
-                  borderColor: selected ? color : theme.colors.border,
-                  backgroundColor: selected ? color : theme.colors.surface,
-                  borderRadius: theme.radius.sm,
-                  opacity: pressed ? 0.8 : 1,
-                },
-              ]}
-            >
-              <Text
-                style={{
-                  color: selected ? theme.colors.onPrimary : theme.colors.text,
-                  fontSize: theme.fontSize.md,
-                  fontWeight: selected ? '700' : '500',
-                  fontVariant: ['tabular-nums'],
-                }}
-              >
-                {score}
-              </Text>
-            </Pressable>
-          )
-        })}
+      <View style={{ gap: 6 }}>
+        {[scores.slice(0, 6), scores.slice(6)].map((row, rowIndex) => (
+          <View key={rowIndex} style={styles.row}>
+            {row.map((score) => {
+              const selected = value === score
+              const color = colorOf(painBand(score))
+              return (
+                <Pressable
+                  key={score}
+                  accessibilityRole="button"
+                  accessibilityLabel={`疼痛评分 ${score}，${labelOf(painBand(score))}`}
+                  accessibilityState={{ selected }}
+                  onPress={() => onChange(selected ? null : score)}
+                  style={({ pressed }) => [
+                    styles.cell,
+                    {
+                      borderColor: selected ? color : theme.colors.border,
+                      backgroundColor: selected ? color : theme.colors.surface,
+                      borderRadius: theme.radius.sm,
+                      opacity: pressed ? 0.8 : 1,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={{
+                      color: selected ? theme.colors.onPrimary : theme.colors.text,
+                      fontSize: theme.fontSize.md,
+                      fontWeight: selected ? '700' : '500',
+                      fontVariant: ['tabular-nums'],
+                    }}
+                  >
+                    {score}
+                  </Text>
+                </Pressable>
+              )
+            })}
+          </View>
+        ))}
       </View>
 
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
@@ -272,18 +276,16 @@ export function SymptomTagManager({
 }
 
 const styles = StyleSheet.create({
-  grid: {
+  row: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     gap: 6,
   },
   cell: {
-    minWidth: 44,
-    height: 44,
+    flex: 1,
+    height: 48,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    flexGrow: 1,
   },
   dot: {
     width: 8,

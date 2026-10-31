@@ -156,18 +156,30 @@ export const darkTheme: Theme = {
 
 const ThemeContext = createContext<Theme>(lightTheme)
 
-export interface ThemeProviderProps {
-  children: ReactNode
-  /** 显式指定主题；不传时跟随系统深浅色。 */
-  theme?: Theme
+/** 主题模式：跟随系统 / 强制浅色 / 强制深色。 */
+export type ThemeMode = 'system' | 'light' | 'dark'
+
+/** 把模式 + 系统配色解析成具体主题，纯函数便于复用。 */
+export function resolveTheme(
+  mode: ThemeMode,
+  scheme: 'light' | 'dark' | null | undefined,
+): Theme {
+  if (mode === 'dark') return darkTheme
+  if (mode === 'light') return lightTheme
+  return scheme === 'dark' ? darkTheme : lightTheme
 }
 
-export function ThemeProvider({ children, theme }: ThemeProviderProps) {
+export interface ThemeProviderProps {
+  children: ReactNode
+  /** 显式指定主题；不传时按 `mode` 决定。 */
+  theme?: Theme
+  /** 默认跟随系统深浅色。 */
+  mode?: ThemeMode
+}
+
+export function ThemeProvider({ children, theme, mode = 'system' }: ThemeProviderProps) {
   const scheme = useColorScheme()
-  const value = useMemo(
-    () => theme ?? (scheme === 'dark' ? darkTheme : lightTheme),
-    [theme, scheme],
-  )
+  const value = useMemo(() => theme ?? resolveTheme(mode, scheme), [theme, mode, scheme])
   return createElement(ThemeContext.Provider, { value }, children)
 }
 

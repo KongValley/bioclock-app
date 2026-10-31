@@ -3,11 +3,12 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 import { Stack, router } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import * as Notifications from 'expo-notifications'
+import * as SystemUI from 'expo-system-ui'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { initDatabase } from '@/db'
 import { useAppStore } from '@/store/app'
-import { ThemeProvider, useTheme } from '@/ui/theme'
+import { ThemeProvider, useTheme, type ThemeMode } from '@/ui/theme'
 import { ToastHost } from '@/ui/components/Toast'
 import { zh } from '@/i18n/zh'
 
@@ -53,6 +54,13 @@ function RootNavigator() {
   const lastResponse = Notifications.useLastNotificationResponse()
   const handledId = useRef<string | null>(null)
 
+  // Android 根视图背景跟着主题走，避免切页/回弹时闪白。
+  useEffect(() => {
+    SystemUI.setBackgroundColorAsync(theme.colors.background).catch(() => {
+      // 部分平台不支持，忽略即可。
+    })
+  }, [theme.colors.background])
+
   // 点击「该注射了」通知 -> 直达登记页，省掉用户在首页再点一次。
   useEffect(() => {
     if (!lastResponse) return
@@ -89,6 +97,9 @@ export default function RootLayout() {
   const [state, setState] = useState<BootState>('loading')
   const [error, setError] = useState<string | null>(null)
   const [attempt, setAttempt] = useState(0)
+  const savedMode = useAppStore((store) => store.settings.theme_mode)
+  const themeMode: ThemeMode =
+    savedMode === 'light' || savedMode === 'dark' ? savedMode : 'system'
 
   useEffect(() => {
     let alive = true
@@ -115,7 +126,7 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={styles.root}>
-      <ThemeProvider>
+      <ThemeProvider mode={themeMode}>
         {state === 'ready' ? <RootNavigator /> : <BootScreen error={error} onRetry={retry} />}
       </ThemeProvider>
     </GestureHandlerRootView>
