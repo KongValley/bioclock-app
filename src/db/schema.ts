@@ -7,7 +7,7 @@
 export const DATABASE_NAME = 'bioclock.db'
 
 /** 当前数据库结构版本，写入 PRAGMA user_version。新增结构变更时 +1 并补充迁移。 */
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 2
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS medication (
@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS medication (
   default_dose REAL,
   unit         TEXT    NOT NULL,
   color        TEXT    NOT NULL,
+  route        TEXT    NOT NULL DEFAULT 'sc',
+  disease_ids  TEXT    NOT NULL DEFAULT '[]',
+  catalog_key  TEXT,
   is_builtin   INTEGER NOT NULL DEFAULT 0,
   created_at   INTEGER NOT NULL
 );
@@ -88,6 +91,18 @@ CREATE INDEX IF NOT EXISTS idx_injection_regimen_time
 
 CREATE INDEX IF NOT EXISTS idx_symptom_log_logged_at
   ON symptom_log (logged_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_medication_catalog_key
+  ON medication (catalog_key) WHERE catalog_key IS NOT NULL;
+`
+
+/** v1 → v2：药物增加给药途径、适用病种、目录稳定标识。 */
+export const MIGRATION_2_SQL = `
+ALTER TABLE medication ADD COLUMN route TEXT NOT NULL DEFAULT 'sc';
+ALTER TABLE medication ADD COLUMN disease_ids TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE medication ADD COLUMN catalog_key TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_medication_catalog_key
+  ON medication (catalog_key) WHERE catalog_key IS NOT NULL;
 `
 
 /** 清空业务数据时按依赖顺序删除，保留内置药。 */

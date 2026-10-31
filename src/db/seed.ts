@@ -1,46 +1,66 @@
 import * as Crypto from 'expo-crypto'
 import type { SQLiteDatabase } from 'expo-sqlite'
 
-export interface BuiltinMedication {
-  name: string
-  genericName: string
-  defaultDose: number
-  unit: string
-  color: string
-}
-
-/** 首版预置药，与 docs/contract.md 的决策一致。 */
-export const BUILTIN_MEDICATIONS: BuiltinMedication[] = [
-  { name: '修美乐', genericName: '阿达木单抗', defaultDose: 40, unit: 'mg', color: '#2B6CB0' },
-  { name: '可善挺', genericName: '司库奇尤单抗', defaultDose: 300, unit: 'mg', color: '#2F855A' },
-  { name: '拓咨', genericName: '依奇珠单抗', defaultDose: 80, unit: 'mg', color: '#6B46C1' },
-  { name: '喜达诺', genericName: '乌司奴单抗', defaultDose: 90, unit: 'mg', color: '#B7791F' },
-  { name: '恩利', genericName: '依那西普', defaultDose: 50, unit: 'mg', color: '#C53030' },
-]
+import { CATALOG_DRUGS, diseaseIdsForDrug } from '@/data/catalog'
 
 /**
- * 播种内置药。按 name + is_builtin 判重，重复调用不会插入重复行。
+ * 把 `src/data/catalog.ts` 的药品目录播种到 medication 表。
+ *
+ * 幂等策略：
+ * 1. 优先用 `catalog_key` 精确匹配；
+ * 2. 兼容 v1 数据库里没有 catalog_key 的 5 条内置药，按 `generic_name` 认领并补齐字段。
+ *
+ * 目录里新增的药品会在下次启动时自动补入，不会影响用户已有的自定义药。
  */
 export async function seedBuiltinMedications(db: SQLiteDatabase): Promise<void> {
   const now = Date.now()
 
-  for (const med of BUILTIN_MEDICATIONS) {
+  for (const drug of CATALOG_DRUGS) {
+    const diseaseIds = diseaseIdsForDrug(drug.key)
+    const diseaseIdsJson = JSON.stringify(diseaseIds)
+
     const existing = await db.getFirstAsync<{ id: string }>(
-      'SELECT id FROM medication WHERE is_builtin = 1 AND name = ? LIMIT 1',
-      med.name,
+      `SELECT id FROM medication
+        WHERE catalog_key = ?
+           OR (is_builtin = 1 AND generic_name = ?)
+        LIMIT 1`,
+      drug.key,
+      drug.genericName,
     )
-    if (existing) continue
+
+    if (existing) {
+      await db.runAsync(
+        `UPDATE medication
+            SET name = ?, generic_name = ?, default_dose = ?, unit = ?, color = ?,
+                route = ?, disease_ids = ?, catalog_key = ?, is_builtin = 1
+          WHERE id = ?`,
+        drug.name,
+        drug.genericName,
+        drug.defaultDose,
+        drug.unit,
+        drug.color,
+        drug.route,
+        diseaseIdsJson,
+        drug.key,
+        existing.id,
+      )
+      continue
+    }
 
     await db.runAsync(
       `INSERT INTO medication
-        (id, name, generic_name, default_dose, unit, color, is_builtin, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 1, ?)`,
+        (id, name, generic_name, default_dose, unit, color, route, disease_ids,
+         catalog_key, is_builtin, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
       Crypto.randomUUID(),
-      med.name,
-      med.genericName,
-      med.defaultDose,
-      med.unit,
-      med.color,
+      drug.name,
+      drug.genericName,
+      drug.defaultDose,
+      drug.unit,
+      drug.color,
+      drug.route,
+      diseaseIdsJson,
+      drug.key,
       now,
     )
   }

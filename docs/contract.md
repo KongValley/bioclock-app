@@ -247,3 +247,71 @@ export function useAppStore(): {
 
 所有 repo/domain 函数遇到非法输入**抛错**，错误信息用中文，UI 层负责 catch 并 toast。
 不要静默吞异常。
+
+---
+
+# 补充 v2：疾病目录与给药途径
+
+已由主代理实现，**只读，不要修改**。B/C/D 直接 import。
+
+## 类型（已在 src/types.ts）
+
+```ts
+export type MedicationRoute = 'sc' | 'iv'   // 皮下 / 静脉输注
+export type DiseaseGroup = 'ibd' | 'skin' | 'joint' | 'other'
+
+export interface Disease {
+  id: string; name: string; aliases: string[]; group: DiseaseGroup; summary: string
+}
+
+export interface RegimenPhaseTemplate {
+  kind: PhaseKind; intervalDays: number; repeatCount: number
+  dose: number | null; unit: string
+}
+export interface RegimenTemplate {
+  name: string; anchor: RegimenAnchor; windowDays: number; phases: RegimenPhaseTemplate[]
+}
+export interface CatalogDrug {
+  key: string; name: string; genericName: string; brandNames: string[]
+  route: MedicationRoute; defaultDose: number | null; unit: string
+  color: string; note?: string
+}
+export interface DiseaseDrug {
+  diseaseId: string; drugKey: string; firstLine: boolean
+  doseNote?: string; regimen: RegimenTemplate
+}
+```
+
+`Medication` 已扩展：`route: 'sc' | 'iv'`、`diseaseIds: string[]`、`catalogKey: string | null`。
+
+## 只读模块
+
+```ts
+// src/data/diseases.ts
+export const DISEASES: Disease[]
+export const DISEASE_GROUPS: Array<{ id: DiseaseGroup; name: string }>
+export const DISEASE_DISCLAIMER: string
+export function findDisease(id: string | null | undefined): Disease | undefined
+export function diseasesByGroup(group: DiseaseGroup): Disease[]
+
+// src/data/catalog.ts
+export const CATALOG_DRUGS: CatalogDrug[]
+export const DISEASE_DRUGS: DiseaseDrug[]
+export const DRUGS_BY_KEY: Record<string, CatalogDrug>
+export function drugsForDisease(diseaseId: string): Array<{ drug: CatalogDrug; entry: DiseaseDrug }>
+export function diseaseIdsForDrug(drugKey: string): string[]
+export function regimenFor(diseaseId: string, drugKey: string): DiseaseDrug | undefined
+```
+
+## repo 新增
+
+```ts
+medications.listForDisease(diseaseId: string): Promise<Medication[]>
+```
+
+## 约定
+
+- `settings` 固定 key：`disease_id`、`patient_name`、`onboarded_at`、`app_lock`、`theme_mode`、`dnd_start`、`dnd_end`。
+- **`route === 'iv'` 时不要展示"注射部位"选择器**（部位轮换只对皮下有意义），但 `Injection.site` 必须写合法值，统一写 `'abdomen_ul'`。
+- 涉及"按体重计算剂量"的文案必须带"以医生处方为准"。
+- 面向用户的文案里不要出现"推荐用药""建议换药"这类表述。

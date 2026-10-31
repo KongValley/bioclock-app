@@ -5,6 +5,7 @@ import type {
   Injection,
   InjectionSite,
   Medication,
+  MedicationRoute,
   PhaseKind,
   Regimen,
   RegimenAnchor,
@@ -32,6 +33,9 @@ interface MedicationRow {
   default_dose: number | null
   unit: string
   color: string
+  route: MedicationRoute
+  disease_ids: string
+  catalog_key: string | null
   is_builtin: number
   created_at: number
 }
@@ -102,8 +106,22 @@ function mapMedication(row: MedicationRow): Medication {
     defaultDose: row.default_dose,
     unit: row.unit,
     color: row.color,
+    route: row.route === 'iv' ? 'iv' : 'sc',
+    diseaseIds: parseStringArray(row.disease_ids),
+    catalogKey: row.catalog_key,
     isBuiltin: row.is_builtin === 1,
     createdAt: row.created_at,
+  }
+}
+
+function parseStringArray(raw: string | null | undefined): string[] {
+  if (!raw) return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((item): item is string => typeof item === 'string')
+  } catch {
+    return []
   }
 }
 
@@ -337,6 +355,15 @@ export const medications = {
     return rows.map(mapMedication)
   },
 
+  /** 某病种可用的药（内置目录药按 disease_ids 过滤）。 */
+  async listForDisease(diseaseId: string): Promise<Medication[]> {
+    requireNonEmptyString(diseaseId, '病种 ID')
+    const all = await medications.list()
+    return all.filter(
+      (med) => med.isBuiltin && med.diseaseIds.includes(diseaseId),
+    )
+  },
+
   async get(id: string): Promise<Medication | null> {
     requireNonEmptyString(id, '药物 ID')
     const db = await getDatabase()
@@ -353,6 +380,14 @@ export const medications = {
       input.genericName === null || input.genericName === undefined
         ? null
         : requireNonEmptyString(input.genericName, '通用名')
+    const route: MedicationRoute = input.route === 'iv' ? 'iv' : 'sc'
+    const diseaseIds = Array.isArray(input.diseaseIds)
+      ? input.diseaseIds.filter((id) => typeof id === 'string' && id.length > 0)
+      : []
+    const catalogKey =
+      input.catalogKey === null || input.catalogKey === undefined
+        ? null
+        : requireNonEmptyString(input.catalogKey, '目录标识')
 
     if (typeof input.isBuiltin !== 'boolean') fail('isBuiltin 必须是布尔值')
 
@@ -364,20 +399,27 @@ export const medications = {
       default_dose: defaultDose,
       unit,
       color,
+      route,
+      disease_ids: JSON.stringify(diseaseIds),
+      catalog_key: catalogKey,
       is_builtin: input.isBuiltin ? 1 : 0,
       created_at: Date.now(),
     }
 
     await db.runAsync(
       `INSERT INTO medication
-        (id, name, generic_name, default_dose, unit, color, is_builtin, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, name, generic_name, default_dose, unit, color, route, disease_ids,
+         catalog_key, is_builtin, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       row.id,
       row.name,
       row.generic_name,
       row.default_dose,
       row.unit,
       row.color,
+      row.route,
+      row.disease_ids,
+      row.catalog_key,
       row.is_builtin,
       row.created_at,
     )

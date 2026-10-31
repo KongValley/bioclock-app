@@ -3,6 +3,7 @@ import {
   CREATE_TABLES_SQL,
   DATABASE_NAME,
   DELETE_ALL_BUSINESS_DATA_SQL,
+  MIGRATION_2_SQL,
   SCHEMA_VERSION,
 } from './schema'
 import { seedBuiltinMedications } from './seed'
@@ -55,8 +56,13 @@ async function migrate(db: SQLite.SQLiteDatabase, fromVersion: number): Promise<
     version = 1
   }
 
+  if (version < 2) {
+    await db.execAsync(MIGRATION_2_SQL)
+    version = 2
+  }
+
   // 后续结构变更在此追加：
-  // if (version < 2) { ...; version = 2 }
+  // if (version < 3) { ...; version = 3 }
 
   await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`)
 }

@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native'
-import { Stack } from 'expo-router'
+import { Stack, router } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
+import * as Notifications from 'expo-notifications'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { initDatabase } from '@/db'
+import { useAppStore } from '@/store/app'
 import { ThemeProvider, useTheme } from '@/ui/theme'
+import { ToastHost } from '@/ui/components/Toast'
 import { zh } from '@/i18n/zh'
 
 export { useTheme } from '@/ui/theme'
@@ -47,9 +50,29 @@ function BootScreen({ error, onRetry }: { error: string | null; onRetry: () => v
 
 function RootNavigator() {
   const theme = useTheme()
+  const lastResponse = Notifications.useLastNotificationResponse()
+  const handledId = useRef<string | null>(null)
+
+  // 点击「该注射了」通知 -> 直达登记页，省掉用户在首页再点一次。
+  useEffect(() => {
+    if (!lastResponse) return
+    const identifier = lastResponse.notification.request.identifier
+    if (handledId.current === identifier) return
+    handledId.current = identifier
+
+    const data: unknown = lastResponse.notification.request.content.data
+    if (typeof data !== 'object' || data === null) return
+    const payload = data as { type?: unknown }
+    if (payload.type !== 'dose') return
+    if (!useAppStore.getState().settings.onboarded_at) return
+
+    router.push('/modal/injection')
+  }, [lastResponse])
+
   return (
     <SafeAreaProvider>
       <StatusBar style={theme.isDark ? 'light' : 'dark'} />
+      <ToastHost />
       <Stack
         screenOptions={{
           headerShown: false,
@@ -73,6 +96,7 @@ export default function RootLayout() {
     setError(null)
 
     initDatabase()
+      .then(() => useAppStore.getState().reload())
       .then(() => {
         if (alive) setState('ready')
       })
