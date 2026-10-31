@@ -28,7 +28,7 @@ describe('药物目录完整性', () => {
   it('英夫利西单抗收录国内已上市的原研与生物类似药', () => {
     const drug = DRUGS_BY_KEY.infliximab
     expect(drug).toBeDefined()
-    expect(drug?.brandNames).toEqual(expect.arrayContaining(['类克', '安佰特', '类停']))
+    expect(drug?.brandNames).toEqual(expect.arrayContaining(['类克', '类停', '安佰特', '佳佑健']))
   })
 
   it('阿达木单抗与依那西普覆盖常见国产商品名', () => {
