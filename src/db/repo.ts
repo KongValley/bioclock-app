@@ -12,6 +12,7 @@ import type {
   RegimenPhase,
   ReminderRule,
   SymptomLog,
+  SymptomTag,
 } from '@/types'
 import { getDatabase } from './index'
 
@@ -79,10 +80,19 @@ interface SymptomLogRow {
   id: string
   logged_at: number
   severity: number
+  pain_score: number | null
   tags: string
   note: string | null
   temperature: number | null
   injection_id: string | null
+}
+
+interface SymptomTagRow {
+  id: string
+  name: string
+  is_builtin: number
+  sort_order: number
+  created_at: number
 }
 
 interface ReminderRuleRow {
@@ -184,10 +194,21 @@ function mapSymptom(row: SymptomLogRow): SymptomLog {
     id: row.id,
     loggedAt: row.logged_at,
     severity: row.severity as SymptomLog['severity'],
+    painScore: row.pain_score,
     tags: parseTags(row.tags),
     note: row.note,
     temperature: row.temperature,
     injectionId: row.injection_id,
+  }
+}
+
+function mapSymptomTag(row: SymptomTagRow): SymptomTag {
+  return {
+    id: row.id,
+    name: row.name,
+    isBuiltin: row.is_builtin === 1,
+    sortOrder: row.sort_order,
+    createdAt: row.created_at,
   }
 }
 
@@ -765,14 +786,22 @@ export const symptoms = {
     return rows.map(mapSymptom)
   },
 
+  async get(id: string): Promise<SymptomLog | null> {
+    requireNonEmptyString(id, '症状记录 ID')
+    const db = await getDatabase()
+    const row = await getSymptomRow(db, id)
+    return row ? mapSymptom(row) : null
+  },
+
   async create(input: Omit<SymptomLog, 'id'>): Promise<SymptomLog> {
     const loggedAt = requireTimestamp(input?.loggedAt, '记录时间')
     const severity = requireInteger(input.severity, '严重程度', 1)
     if (severity > 5) fail('严重程度必须在 1 到 5 之间')
 
     if (!Array.isArray(input.tags)) fail('症状标签必须是数组')
-    const tags = input.tags.map((tag) => requireNonEmptyString(tag, '症状标签'))
+    const tags = normalizeTags(input.tags)
 
+    const painScore = normalizePainScore(input.painScore)
     const note = normalizeOptionalText(input.note)
     const temperature = normalizeTemperature(input.temperature)
     const injectionId = normalizeOptionalId(input.injectionId)
@@ -787,6 +816,7 @@ export const symptoms = {
       id: Crypto.randomUUID(),
       logged_at: loggedAt,
       severity,
+      pain_score: painScore,
       tags: JSON.stringify(tags),
       note,
       temperature,
@@ -795,11 +825,12 @@ export const symptoms = {
 
     await db.runAsync(
       `INSERT INTO symptom_log
-        (id, logged_at, severity, tags, note, temperature, injection_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        (id, logged_at, severity, pain_score, tags, note, temperature, injection_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       row.id,
       row.logged_at,
       row.severity,
+      row.pain_score,
       row.tags,
       row.note,
       row.temperature,
@@ -808,11 +839,122 @@ export const symptoms = {
     return mapSymptom(row)
   },
 
+  async update(id: string, patch: Partial<Omit<SymptomLog, 'id'>>): Promise<SymptomLog> {
+    requireNonEmptyString(id, '症状记录 ID')
+    const db = await getDatabase()
+    const existing = await getSymptomRow(db, id)
+    if (!existing) fail('症状记录不存在')
+
+    const sets: string[] = []
+    const values: Array<string | number | null> = []
+
+    if (patch.loggedAt !== undefined) {
+      sets.push('logged_at = ?')
+      values.push(requireTimestamp(patch.loggedAt, '记录时间'))
+    }
+    if (patch.severity !== undefined) {
+      const severity = requireInteger(patch.severity, '严重程度', 1)
+      if (severity > 5) fail('严重程度必须在 1 到 5 之间')
+      sets.push('severity = ?')
+      values.push(severity)
+    }
+    if (patch.painScore !== undefined) {
+      sets.push('pain_score = ?')
+      values.push(normalizePainScore(patch.painScore))
+    }
+    if (patch.tags !== undefined) {
+      if (!Array.isArray(patch.tags)) fail('症状标签必须是数组')
+      sets.push('tags = ?')
+      values.push(JSON.stringify(normalizeTags(patch.tags)))
+    }
+    if (patch.note !== undefined) {
+      sets.push('note = ?')
+      values.push(normalizeOptionalText(patch.note))
+    }
+    if (patch.temperature !== undefined) {
+      sets.push('temperature = ?')
+      values.push(normalizeTemperature(patch.temperature))
+    }
+    if (patch.injectionId !== undefined) {
+      const injectionId = normalizeOptionalId(patch.injectionId)
+      if (injectionId !== null) {
+        const injection = await getInjectionRow(db, injectionId)
+        if (!injection) fail('关联的注射记录不存在')
+      }
+      sets.push('injection_id = ?')
+      values.push(injectionId)
+    }
+
+    if (sets.length === 0) return mapSymptom(existing)
+
+    values.push(id)
+    await db.runAsync(`UPDATE symptom_log SET ${sets.join(', ')} WHERE id = ?`, values)
+
+    const updated = await getSymptomRow(db, id)
+    if (!updated) fail('症状记录不存在')
+    return mapSymptom(updated)
+  },
+
   async remove(id: string): Promise<void> {
     requireNonEmptyString(id, '症状记录 ID')
     const db = await getDatabase()
     const result = await db.runAsync('DELETE FROM symptom_log WHERE id = ?', id)
     if (result.changes === 0) fail('症状记录不存在')
+  },
+}
+
+// ---------------------------------------------------------------------------
+// symptom tags（用户可维护的症状名称）
+// ---------------------------------------------------------------------------
+
+export const symptomTags = {
+  async list(): Promise<SymptomTag[]> {
+    const db = await getDatabase()
+    const rows = await db.getAllAsync<SymptomTagRow>(
+      'SELECT * FROM symptom_tag ORDER BY sort_order ASC, created_at ASC',
+    )
+    return rows.map(mapSymptomTag)
+  },
+
+  async create(name: string): Promise<SymptomTag> {
+    const safeName = requireNonEmptyString(name, '症状名称')
+    if (safeName.length > 20) fail('症状名称最多 20 个字')
+
+    const db = await getDatabase()
+    const duplicate = await db.getFirstAsync<{ id: string }>(
+      'SELECT id FROM symptom_tag WHERE name = ? COLLATE NOCASE LIMIT 1',
+      safeName,
+    )
+    if (duplicate) fail('这个症状已经存在')
+
+    const maxRow = await db.getFirstAsync<{ max_order: number | null }>(
+      'SELECT MAX(sort_order) AS max_order FROM symptom_tag',
+    )
+    const row: SymptomTagRow = {
+      id: Crypto.randomUUID(),
+      name: safeName,
+      is_builtin: 0,
+      sort_order: (maxRow?.max_order ?? -1) + 1,
+      created_at: Date.now(),
+    }
+
+    await db.runAsync(
+      `INSERT INTO symptom_tag (id, name, is_builtin, sort_order, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      row.id,
+      row.name,
+      row.is_builtin,
+      row.sort_order,
+      row.created_at,
+    )
+    return mapSymptomTag(row)
+  },
+
+  async remove(id: string): Promise<void> {
+    requireNonEmptyString(id, '症状标签 ID')
+    const db = await getDatabase()
+    const result = await db.runAsync('DELETE FROM symptom_tag WHERE id = ?', id)
+    if (result.changes === 0) fail('症状标签不存在')
   },
 }
 
@@ -961,4 +1103,25 @@ function normalizeTemperature(value: number | null | undefined): number | null {
   const temp = requireFiniteNumber(value, '体温')
   if (temp < 30 || temp > 45) fail('体温必须在 30℃ 到 45℃ 之间')
   return temp
+}
+
+/** NRS 0–10 整数评分；null 表示本次未评估。 */
+function normalizePainScore(value: number | null | undefined): number | null {
+  if (value === null || value === undefined) return null
+  const score = requireInteger(value, '疼痛评分', 0)
+  if (score > 10) fail('疼痛评分必须在 0 到 10 之间')
+  return score
+}
+
+function normalizeTags(tags: string[]): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const tag of tags) {
+    const name = requireNonEmptyString(tag, '症状标签')
+    if (name.length > 20) fail('症状名称最多 20 个字')
+    if (seen.has(name)) continue
+    seen.add(name)
+    result.push(name)
+  }
+  return result
 }

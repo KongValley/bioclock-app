@@ -7,7 +7,7 @@
 export const DATABASE_NAME = 'bioclock.db'
 
 /** 当前数据库结构版本，写入 PRAGMA user_version。新增结构变更时 +1 并补充迁移。 */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS medication (
@@ -66,10 +66,19 @@ CREATE TABLE IF NOT EXISTS symptom_log (
   id           TEXT    PRIMARY KEY NOT NULL,
   logged_at    INTEGER NOT NULL,
   severity     INTEGER NOT NULL CHECK (severity BETWEEN 1 AND 5),
+  pain_score   REAL,
   tags         TEXT    NOT NULL DEFAULT '[]',
   note         TEXT,
   temperature  REAL,
   injection_id TEXT REFERENCES injection(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS symptom_tag (
+  id         TEXT    PRIMARY KEY NOT NULL,
+  name       TEXT    NOT NULL UNIQUE,
+  is_builtin INTEGER NOT NULL DEFAULT 0,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS reminder_rule (
@@ -92,6 +101,9 @@ CREATE INDEX IF NOT EXISTS idx_injection_regimen_time
 CREATE INDEX IF NOT EXISTS idx_symptom_log_logged_at
   ON symptom_log (logged_at);
 
+CREATE INDEX IF NOT EXISTS idx_symptom_tag_order
+  ON symptom_tag (sort_order, created_at);
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_medication_catalog_key
   ON medication (catalog_key) WHERE catalog_key IS NOT NULL;
 `
@@ -105,9 +117,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_medication_catalog_key
   ON medication (catalog_key) WHERE catalog_key IS NOT NULL;
 `
 
+/** v2 → v3：症状增加临床疼痛评分（NRS 0–10），症状标签改为可维护的数据表。 */
+export const MIGRATION_3_SQL = `
+ALTER TABLE symptom_log ADD COLUMN pain_score REAL;
+CREATE TABLE IF NOT EXISTS symptom_tag (
+  id         TEXT    PRIMARY KEY NOT NULL,
+  name       TEXT    NOT NULL UNIQUE,
+  is_builtin INTEGER NOT NULL DEFAULT 0,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_symptom_tag_order
+  ON symptom_tag (sort_order, created_at);
+`
+
 /** 清空业务数据时按依赖顺序删除，保留内置药。 */
 export const DELETE_ALL_BUSINESS_DATA_SQL = `
 DELETE FROM symptom_log;
+DELETE FROM symptom_tag;
 DELETE FROM injection;
 DELETE FROM reminder_rule;
 DELETE FROM regimen_phase;
@@ -119,6 +146,7 @@ DELETE FROM medication WHERE is_builtin = 0;
 /** 仅在调试或彻底重装时使用。 */
 export const DROP_ALL_TABLES_SQL = `
 DROP TABLE IF EXISTS symptom_log;
+DROP TABLE IF EXISTS symptom_tag;
 DROP TABLE IF EXISTS injection;
 DROP TABLE IF EXISTS reminder_rule;
 DROP TABLE IF EXISTS regimen_phase;

@@ -73,7 +73,7 @@ export default function TodayScreen() {
       return (
         <Card>
           <StateView
-            glyph="＋"
+            icon="plus"
             title={zh.empty.todayNoRegimen}
             message="选择病种和药物，设置注射间隔后，这里会显示下一次注射时间。"
             actionLabel="去设置方案"
@@ -87,7 +87,7 @@ export default function TodayScreen() {
     if (!plan) {
       return (
         <Card>
-          <StateView glyph="◔" title={zh.today.noSchedule} compact />
+          <StateView icon="syringe" title={zh.today.noSchedule} compact />
         </Card>
       )
     }
@@ -330,7 +330,7 @@ export default function TodayScreen() {
           label={zh.today.quickLogSymptom}
           onPress={openSymptom}
           variant="secondary"
-          icon="✎"
+          icon="pencil"
         />
 
         <Text

@@ -9,15 +9,17 @@ import {
   Text,
   View,
 } from 'react-native'
-import { useRouter } from 'expo-router'
+import { useLocalSearchParams, useRouter } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useTheme } from '@/ui/theme'
-import { SYMPTOM_TAGS, zh } from '@/i18n/zh'
+import { zh } from '@/i18n/zh'
 import { useAppStore, errorMessage } from '@/store/app'
 import type { SymptomLog } from '@/types'
 import { TextField } from '@/ui/components/Field'
 import { DateTimeField } from '@/ui/components/TimeField'
+import { Icon } from '@/ui/components/Icon'
 import { Button } from '@/ui/components/Button'
+import { PainScale, SymptomTagManager } from '@/ui/components/SymptomFields'
 import { InlineError } from '@/ui/components/Layout'
 import { LoadingView } from '@/ui/components/StateView'
 import { toast, ToastHost } from '@/ui/components/Toast'
@@ -36,20 +38,30 @@ export default function SymptomModal() {
   const theme = useTheme()
   const router = useRouter()
   const insets = useSafeAreaInsets()
+  const params = useLocalSearchParams<{ id?: string | string[] }>()
+  const editingId = Array.isArray(params.id) ? params.id[0] : params.id
 
   const ready = useAppStore((state) => state.ready)
   const medications = useAppStore((state) => state.medications)
   const injections = useAppStore((state) => state.injections)
+  const symptoms = useAppStore((state) => state.symptoms)
+  const symptomTags = useAppStore((state) => state.symptomTags)
   const appLockEnabled = useAppStore((state) => state.settings.app_lock === '1')
   const reload = useAppStore((state) => state.reload)
   const addSymptom = useAppStore((state) => state.addSymptom)
+  const updateSymptom = useAppStore((state) => state.updateSymptom)
+
+  const editing = editingId ? symptoms.find((item) => item.id === editingId) : undefined
 
   const [loggedAt, setLoggedAt] = useState<number>(() => Date.now())
   const [severity, setSeverity] = useState<SymptomLog['severity']>(3)
+  const [painScore, setPainScore] = useState<number | null>(null)
   const [tags, setTags] = useState<string[]>([])
   const [temperatureText, setTemperatureText] = useState<string>('')
   const [note, setNote] = useState<string>('')
   const [injectionId, setInjectionId] = useState<string | null>(null)
+  const [managerOpen, setManagerOpen] = useState(false)
+  const [initialized, setInitialized] = useState(false)
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
 
@@ -60,6 +72,20 @@ export default function SymptomModal() {
       })
     }
   }, [ready, reload])
+
+  useEffect(() => {
+    if (!ready || initialized) return
+    if (editing) {
+      setLoggedAt(editing.loggedAt)
+      setSeverity(editing.severity)
+      setPainScore(editing.painScore)
+      setTags(editing.tags)
+      setTemperatureText(editing.temperature !== null ? String(editing.temperature) : '')
+      setNote(editing.note ?? '')
+      setInjectionId(editing.injectionId)
+    }
+    setInitialized(true)
+  }, [ready, initialized, editing])
 
   const medicationNames = useMemo(() => {
     const map = new Map<string, string>()
@@ -87,6 +113,13 @@ export default function SymptomModal() {
     )
   }
 
+  // 已选但已被删除的标签仍然要显示出来，否则编辑旧记录时看不见、也取消不掉。
+  const tagOptions = useMemo(() => {
+    const names = symptomTags.map((item) => item.name)
+    const orphan = tags.filter((tag) => !names.includes(tag))
+    return [...names, ...orphan]
+  }, [symptomTags, tags])
+
   const save = async () => {
     setFormError(null)
     let temperature: number | null = null
@@ -101,16 +134,20 @@ export default function SymptomModal() {
 
     setSaving(true)
     try {
-      const result = await addSymptom({
+      const payload = {
         loggedAt,
         severity,
+        painScore,
         tags,
         note: note.trim() === '' ? null : note.trim(),
         temperature,
         injectionId,
-      })
+      }
+      const result = editing
+        ? await updateSymptom(editing.id, payload)
+        : await addSymptom(payload)
       close()
-      toast('症状已记录', 'success')
+      toast(editing ? '症状记录已更新' : '症状已记录', 'success')
       if (result.notifyWarning) toast(result.notifyWarning, 'error')
     } catch (error) {
       setFormError(errorMessage(error))
@@ -155,7 +192,7 @@ export default function SymptomModal() {
                   fontWeight: '700',
                 }}
               >
-                {zh.history.addSymptom}
+                {editing ? '编辑症状' : zh.history.addSymptom}
               </Text>
               <Pressable
                 accessibilityRole="button"
@@ -169,9 +206,7 @@ export default function SymptomModal() {
                   },
                 ]}
               >
-                <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.xl }}>
-                  ✕
-                </Text>
+                <Icon name="close" size={22} color={theme.colors.textSecondary} />
               </Pressable>
             </View>
 
@@ -253,17 +288,38 @@ export default function SymptomModal() {
                 </View>
 
                 <View style={{ gap: 8 }}>
-                  <Text
-                    style={{
-                      color: theme.colors.textSecondary,
-                      fontSize: theme.fontSize.sm,
-                      fontWeight: '500',
-                    }}
-                  >
-                    {zh.form.symptomTags}
-                  </Text>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text
+                      style={{
+                        color: theme.colors.textSecondary,
+                        fontSize: theme.fontSize.sm,
+                        fontWeight: '500',
+                      }}
+                    >
+                      {zh.form.symptomTags}
+                    </Text>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={zh.form.manageTags}
+                      accessibilityState={{ expanded: managerOpen }}
+                      onPress={() => setManagerOpen((open) => !open)}
+                      style={({ pressed }) => [
+                        styles.manageButton,
+                        { opacity: pressed ? 0.6 : 1 },
+                      ]}
+                    >
+                      <Icon
+                        name={managerOpen ? 'close' : 'settings'}
+                        size={14}
+                        color={theme.colors.primary}
+                      />
+                      <Text style={{ color: theme.colors.primary, fontSize: theme.fontSize.xs }}>
+                        {zh.form.manageTags}
+                      </Text>
+                    </Pressable>
+                  </View>
                   <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                    {SYMPTOM_TAGS.map((tag) => {
+                    {tagOptions.map((tag) => {
                       const selected = tags.includes(tag)
                       return (
                         <Pressable
@@ -297,7 +353,23 @@ export default function SymptomModal() {
                       )
                     })}
                   </View>
+                  {tagOptions.length === 0 ? (
+                    <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.xs }}>
+                      {zh.form.tagEmpty}
+                    </Text>
+                  ) : null}
+                  {managerOpen ? (
+                    <SymptomTagManager
+                      onAdded={(name) => {
+                        setTags((current) =>
+                          current.includes(name) ? current : [...current, name],
+                        )
+                      }}
+                    />
+                  ) : null}
                 </View>
+
+                <PainScale value={painScore} onChange={setPainScore} />
 
                 <TextField
                   label={`${zh.form.temperature}（${zh.common.optional}）`}
@@ -415,7 +487,7 @@ export default function SymptomModal() {
             >
               <Button label={zh.common.cancel} onPress={close} variant="secondary" style={{ flex: 1 }} />
               <Button
-                label="保存记录"
+                label={editing ? zh.common.save : '保存记录'}
                 onPress={() => {
                   void save()
                 }}
@@ -461,5 +533,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingHorizontal: 12,
     borderWidth: 1,
+  },
+  manageButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    minHeight: 44,
+    paddingHorizontal: 8,
   },
 })

@@ -7,6 +7,7 @@ import {
   reminderRules,
   settings as settingsRepo,
   symptoms as symptomRepo,
+  symptomTags as symptomTagRepo,
 } from '@/db/repo'
 import { rescheduleAll } from '@/notify/scheduler'
 import type {
@@ -17,6 +18,7 @@ import type {
   Regimen,
   ReminderRule,
   SymptomLog,
+  SymptomTag,
 } from '@/types'
 
 /**
@@ -41,6 +43,7 @@ export interface AppStore {
   disease: Disease | null
   injections: Injection[]
   symptoms: SymptomLog[]
+  symptomTags: SymptomTag[]
   reminder: ReminderRule | null
   settings: AppSettings
   reload(): Promise<void>
@@ -51,7 +54,10 @@ export interface AppStore {
   ): Promise<MutationResult>
   removeInjection(id: string): Promise<MutationResult>
   addSymptom(input: Omit<SymptomLog, 'id'>): Promise<MutationResult>
+  updateSymptom(id: string, patch: Partial<Omit<SymptomLog, 'id'>>): Promise<MutationResult>
   removeSymptom(id: string): Promise<MutationResult>
+  addSymptomTag(name: string): Promise<MutationResult>
+  removeSymptomTag(id: string): Promise<MutationResult>
   updateReminder(input: Omit<ReminderRule, 'id'> & { id?: string }): Promise<MutationResult>
   updateSettings(patch: Record<string, string>): Promise<MutationResult>
 }
@@ -92,6 +98,7 @@ export const useAppStore = create<AppStore>((set) => ({
   disease: null,
   injections: [],
   symptoms: [],
+  symptomTags: [],
   reminder: null,
   settings: {},
 
@@ -99,10 +106,11 @@ export const useAppStore = create<AppStore>((set) => ({
     set((state) => ({ refreshing: state.ready, error: null }))
     try {
       const active = await regimenRepo.listActive()
-      const [allSettings, allMedications, allSymptoms] = await Promise.all([
+      const [allSettings, allMedications, allSymptoms, allSymptomTags] = await Promise.all([
         settingsRepo.all(),
         medicationRepo.list(),
         symptomRepo.list(),
+        symptomTagRepo.list(),
       ])
       const injectionList = await injectionRepo.list(active ? active.id : undefined)
       const reminder = active ? await reminderRules.getFor(active.id) : null
@@ -120,6 +128,7 @@ export const useAppStore = create<AppStore>((set) => ({
         disease: findDisease(allSettings.disease_id) ?? null,
         injections: injectionList,
         symptoms: allSymptoms,
+        symptomTags: allSymptomTags,
         reminder,
         settings: allSettings,
       })
@@ -149,8 +158,23 @@ export const useAppStore = create<AppStore>((set) => ({
     return { notifyWarning: await afterWrite() }
   },
 
+  updateSymptom: async (id, patch) => {
+    await symptomRepo.update(id, patch)
+    return { notifyWarning: await afterWrite() }
+  },
+
   removeSymptom: async (id) => {
     await symptomRepo.remove(id)
+    return { notifyWarning: await afterWrite() }
+  },
+
+  addSymptomTag: async (name) => {
+    await symptomTagRepo.create(name)
+    return { notifyWarning: await afterWrite() }
+  },
+
+  removeSymptomTag: async (id) => {
+    await symptomTagRepo.remove(id)
     return { notifyWarning: await afterWrite() }
   },
 

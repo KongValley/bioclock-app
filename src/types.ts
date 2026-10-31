@@ -110,10 +110,21 @@ export interface SymptomLog {
   id: string
   loggedAt: number
   severity: 1 | 2 | 3 | 4 | 5
+  /** 临床疼痛评分 NRS 0–10，0 表示无痛；未填写为 null。 */
+  painScore: number | null
   tags: string[]
   note: string | null
   temperature: number | null
   injectionId: string | null
+}
+
+/** 症状标签：内置一批常用项，用户可自行增删。 */
+export interface SymptomTag {
+  id: string
+  name: string
+  isBuiltin: boolean
+  sortOrder: number
+  createdAt: number
 }
 
 export interface ReminderRule {

@@ -311,7 +311,73 @@ medications.listForDisease(diseaseId: string): Promise<Medication[]>
 
 ## 约定
 
-- `settings` 固定 key：`disease_id`、`patient_name`、`onboarded_at`、`app_lock`、`theme_mode`、`dnd_start`、`dnd_end`。
+- `settings` 固定 key：`disease_id`、`patient_name`、`onboarded_at`、`app_lock`、`theme_mode`、`dnd_start`、`dnd_end`；内部标记位 `symptom_tags_seeded` 只用于症状标签的首次播种，UI 不读取。
 - **`route === 'iv'` 时不要展示"注射部位"选择器**（部位轮换只对皮下有意义），但 `Injection.site` 必须写合法值，统一写 `'abdomen_ul'`。
 - 涉及"按体重计算剂量"的文案必须带"以医生处方为准"。
 - 面向用户的文案里不要出现"推荐用药""建议换药"这类表述。
+
+---
+
+# 补充 v3：疼痛评分与可维护的症状标签
+
+`SCHEMA_VERSION = 3`，`src/db/schema.ts` 导出 `MIGRATION_3_SQL`。
+
+## symptom_log.pain_score
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `pain_score` | `REAL`，可空 | 临床疼痛评分，采用 NRS（数字评分法），取值 0–10 |
+
+- NRS 0–10：`0` 表示无痛，`1–3` 轻度疼痛，`4–6` 中度疼痛，`7–10` 重度疼痛。
+- 未填写时存 `NULL`，与"评分为 0（确实无痛）"区分开。
+- 与 `severity`（1–5 的整体不适程度）是**两个独立维度**，不要互相换算或覆盖。
+
+## symptom_tag
+
+```sql
+CREATE TABLE symptom_tag (
+  id         TEXT    PRIMARY KEY NOT NULL,
+  name       TEXT    NOT NULL UNIQUE,
+  is_builtin INTEGER NOT NULL DEFAULT 0,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX idx_symptom_tag_order ON symptom_tag (sort_order, created_at);
+```
+
+| 列 | 说明 |
+| --- | --- |
+| `id` | `crypto.randomUUID()` |
+| `name` | 标签文字，全表唯一，也是展示内容 |
+| `is_builtin` | 是否为内置标签（首次启动播种的那批） |
+| `sort_order` | 展示顺序，越小越靠前；索引 `idx_symptom_tag_order` 按 `(sort_order, created_at)` 排序 |
+| `created_at` | UTC 毫秒 |
+
+用途与约定：
+
+- 标签是**用户可增删**的配置：内置项在首次启动时由 `seedBuiltinSymptomTags` 写入，并用 `app_setting.symptom_tags_seeded` 标记已播种，用户删掉的标签不会被下次启动加回来。
+- **`symptom_log.tags` 保存的是标签文字数组（JSON 文本）的快照**，不是 `symptom_tag.id` 外键。因此删除或重命名标签不会篡改历史记录，历史展示始终用当时记录的文字。
+- 新增记录时的候选标签从 `symptom_tag` 按 `sort_order, created_at` 读取。
+
+## 类型（已在 src/types.ts）
+
+```ts
+export interface SymptomLog {
+  id: string
+  loggedAt: number
+  severity: 1 | 2 | 3 | 4 | 5
+  painScore: number | null   // NRS 0–10，0 表示无痛
+  tags: string[]             // 文字快照
+  note: string | null
+  temperature: number | null
+  injectionId: string | null
+}
+
+export interface SymptomTag {
+  id: string
+  name: string
+  isBuiltin: boolean
+  sortOrder: number
+  createdAt: number
+}
+```

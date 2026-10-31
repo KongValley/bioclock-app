@@ -109,7 +109,7 @@ export default function TrendsScreen() {
     if (intervals.length === 0) {
       return (
         <StateView
-          glyph="◔"
+          icon="syringe"
           title="还差一次注射记录"
           message="记录满两次注射后，这里会显示实际间隔与方案间隔的对比。"
           compact
@@ -219,7 +219,7 @@ export default function TrendsScreen() {
     if (!symptomRange) {
       return (
         <StateView
-          glyph="☺"
+          icon="smile"
           title="还没有可对齐的数据"
           message="至少需要一次注射记录和一条症状记录。"
           compact
@@ -336,7 +336,7 @@ export default function TrendsScreen() {
         {empty ? (
           <Card>
             <StateView
-              glyph="◔"
+              icon="activity"
               title={zh.empty.trendsNoData}
               message="按时、提前、延迟只用于自我回顾；偏差在方案窗口内都算按时。"
               actionLabel={regimen ? '去登记注射' : '去设置方案'}

@@ -33,6 +33,7 @@ import { TextField } from '@/ui/components/Field'
 import { SegmentedControl } from '@/ui/components/SegmentedControl'
 import { Stepper } from '@/ui/components/Stepper'
 import { TimeOfDayField } from '@/ui/components/TimeField'
+import { Icon } from '@/ui/components/Icon'
 import { Screen } from '@/ui/components/Layout'
 import { toast, ToastHost } from '@/ui/components/Toast'
 import { parseTimeOfDay } from '@/ui/components/date'
@@ -595,14 +596,11 @@ export default function OnboardingScreen() {
                 </Text>
               ) : null}
             </View>
-            <Text
-              style={{
-                color: selected ? theme.colors.primary : theme.colors.textTertiary,
-                fontSize: theme.fontSize.lg,
-              }}
-            >
-              {selected ? '✓' : '›'}
-            </Text>
+            {selected ? (
+              <Icon name="check" size={20} color={theme.colors.primary} strokeWidth={2.5} />
+            ) : (
+              <Icon name="chevron-right" size={20} color={theme.colors.textTertiary} />
+            )}
           </Pressable>
         )
       }}
@@ -666,9 +664,16 @@ export default function OnboardingScreen() {
                 手动填写药名、剂型与默认剂量
               </Text>
             </View>
-            <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.md }}>
-              {customOpen ? '收起' : '＋'}
-            </Text>
+            <View style={styles.customToggle}>
+              <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.md }}>
+                {customOpen ? '收起' : '展开'}
+              </Text>
+              <Icon
+                name={customOpen ? 'chevron-left' : 'plus'}
+                size={18}
+                color={theme.colors.textTertiary}
+              />
+            </View>
           </Pressable>
 
           {customOpen ? (
@@ -824,14 +829,11 @@ export default function OnboardingScreen() {
                 </Text>
               ) : null}
             </View>
-            <Text
-              style={{
-                color: selected ? theme.colors.primary : theme.colors.textTertiary,
-                fontSize: theme.fontSize.lg,
-              }}
-            >
-              {selected ? '✓' : '›'}
-            </Text>
+            {selected ? (
+              <Icon name="check" size={20} color={theme.colors.primary} strokeWidth={2.5} />
+            ) : (
+              <Icon name="chevron-right" size={20} color={theme.colors.textTertiary} />
+            )}
           </Pressable>
         )
       }}
@@ -1203,7 +1205,7 @@ export default function OnboardingScreen() {
                   },
                 ]}
               >
-                <Text style={{ color: theme.colors.text, fontSize: theme.fontSize.xl }}>‹</Text>
+                <Icon name="chevron-left" size={22} color={theme.colors.text} />
               </Pressable>
             ) : null}
             <View style={{ flex: 1 }}>
@@ -1333,5 +1335,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     padding: 14,
     minHeight: 56,
+  },
+  customToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
 })

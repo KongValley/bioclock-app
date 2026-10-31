@@ -160,7 +160,7 @@ export function AppLockGate({ children }: { children: ReactNode }) {
             }}
             loading={busy}
             size="lg"
-            icon="◎"
+            icon="unlock"
           />
           {error ? (
             <Button label="暂时关闭应用锁" onPress={closeLock} variant="secondary" />

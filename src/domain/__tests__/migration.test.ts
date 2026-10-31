@@ -38,11 +38,13 @@ const sqlite = loadSqlite()
 async function loadSchema(): Promise<{
   CREATE_TABLES_SQL: string
   MIGRATION_2_SQL: string
+  MIGRATION_3_SQL: string
   SCHEMA_VERSION: number
 }> {
   const mod = (await import('../../db/schema')) as {
     CREATE_TABLES_SQL: string
     MIGRATION_2_SQL: string
+    MIGRATION_3_SQL: string
     SCHEMA_VERSION: number
   }
   return mod
@@ -116,6 +118,59 @@ describe.skipIf(!sqlite)('数据库建表与迁移', () => {
 
     // 再次执行迁移必须失败（说明它真正执行了 ALTER，而不是被跳过）
     expect(() => db.exec(schema.MIGRATION_2_SQL)).toThrow(/duplicate column name/i)
+
+    db.close()
+  })
+
+  it('v2 库执行 MIGRATION_3_SQL 后具备疼痛评分列与症状标签表', async () => {
+    const schema = await loadSchema()
+    const DatabaseSync = sqlite!.DatabaseSync
+    const db = new DatabaseSync(freshDbPath())
+
+    // 构造 v2 的 symptom_log 表（没有 pain_score，也没有 symptom_tag 表）
+    db.exec(`
+      CREATE TABLE symptom_log (
+        id           TEXT    PRIMARY KEY NOT NULL,
+        logged_at    INTEGER NOT NULL,
+        severity     INTEGER NOT NULL,
+        tags         TEXT    NOT NULL DEFAULT '[]',
+        note         TEXT,
+        temperature  REAL,
+        injection_id TEXT
+      );
+    `)
+    db.exec('PRAGMA user_version = 2')
+
+    db.exec(schema.MIGRATION_3_SQL)
+    db.exec('PRAGMA user_version = 3')
+
+    const names = (db.prepare('PRAGMA table_info(symptom_log)').all() as Array<{ name: string }>).map(
+      (c) => c.name,
+    )
+    expect(names).toContain('pain_score')
+
+    const tagTable = db
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'symptom_tag'`)
+      .get() as { name: string } | undefined
+    expect(tagTable?.name).toBe('symptom_tag')
+
+    const tagNames = (
+      db.prepare('PRAGMA table_info(symptom_tag)').all() as Array<{ name: string }>
+    ).map((c) => c.name)
+    expect(tagNames).toEqual(
+      expect.arrayContaining(['id', 'name', 'is_builtin', 'sort_order', 'created_at']),
+    )
+
+    const indexNames = (
+      db.prepare('PRAGMA index_list(symptom_tag)').all() as Array<{ name: string }>
+    ).map((i) => i.name)
+    expect(indexNames).toContain('idx_symptom_tag_order')
+
+    const version = db.prepare('PRAGMA user_version').get() as { user_version: number }
+    expect(version.user_version).toBe(3)
+
+    // 再次执行迁移必须失败（说明 ALTER 真正执行了；CREATE TABLE 是 IF NOT EXISTS）
+    expect(() => db.exec(schema.MIGRATION_3_SQL)).toThrow(/duplicate column name/i)
 
     db.close()
   })

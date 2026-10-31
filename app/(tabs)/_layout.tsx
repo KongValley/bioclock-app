@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { StyleSheet, Text, View, type ColorValue } from 'react-native'
+import { StyleSheet, View, type ColorValue } from 'react-native'
 import { Tabs, useRouter } from 'expo-router'
 import { useTheme } from '@/ui/theme'
 import { zh } from '@/i18n/zh'
@@ -7,10 +7,11 @@ import { useAppStore, errorMessage } from '@/store/app'
 import { AppLockGate } from '@/ui/components/AppLockGate'
 import { ToastHost } from '@/ui/components/Toast'
 import { ErrorView, LoadingView } from '@/ui/components/StateView'
+import { Icon, type IconName } from '@/ui/components/Icon'
 import { Screen } from '@/ui/components/Layout'
 
-function TabIcon({ glyph, color }: { glyph: string; color: ColorValue }) {
-  return <Text style={{ fontSize: 20, color }}>{glyph}</Text>
+function TabIcon({ name, color }: { name: IconName; color: ColorValue }) {
+  return <Icon name={name} size={24} color={typeof color === 'string' ? color : undefined} />
 }
 
 export default function TabsLayout() {
@@ -73,7 +74,7 @@ export default function TabsLayout() {
             options={{
               title: zh.tabs.today,
               tabBarAccessibilityLabel: zh.tabs.today,
-              tabBarIcon: ({ color }) => <TabIcon glyph="◉" color={color} />,
+              tabBarIcon: ({ color }) => <TabIcon name="home" color={color} />,
             }}
           />
           <Tabs.Screen
@@ -81,7 +82,7 @@ export default function TabsLayout() {
             options={{
               title: zh.tabs.history,
               tabBarAccessibilityLabel: zh.tabs.history,
-              tabBarIcon: ({ color }) => <TabIcon glyph="☰" color={color} />,
+              tabBarIcon: ({ color }) => <TabIcon name="list" color={color} />,
             }}
           />
           <Tabs.Screen
@@ -89,7 +90,7 @@ export default function TabsLayout() {
             options={{
               title: zh.tabs.trends,
               tabBarAccessibilityLabel: zh.tabs.trends,
-              tabBarIcon: ({ color }) => <TabIcon glyph="◔" color={color} />,
+              tabBarIcon: ({ color }) => <TabIcon name="activity" color={color} />,
             }}
           />
           <Tabs.Screen
@@ -97,7 +98,7 @@ export default function TabsLayout() {
             options={{
               title: zh.tabs.settings,
               tabBarAccessibilityLabel: zh.tabs.settings,
-              tabBarIcon: ({ color }) => <TabIcon glyph="⚙" color={color} />,
+              tabBarIcon: ({ color }) => <TabIcon name="settings" color={color} />,
             }}
           />
         </Tabs>

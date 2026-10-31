@@ -19,6 +19,7 @@ import { recommendSite } from '@/domain/rotation'
 import { TextField } from '@/ui/components/Field'
 import { DateTimeField } from '@/ui/components/TimeField'
 import { SitePicker } from '@/ui/components/SitePicker'
+import { Icon } from '@/ui/components/Icon'
 import { Button } from '@/ui/components/Button'
 import { InlineError } from '@/ui/components/Layout'
 import { LoadingView } from '@/ui/components/StateView'
@@ -220,9 +221,7 @@ export default function InjectionModal() {
                   },
                 ]}
               >
-                <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.xl }}>
-                  ✕
-                </Text>
+                <Icon name="close" size={22} color={theme.colors.textSecondary} />
               </Pressable>
             </View>
 

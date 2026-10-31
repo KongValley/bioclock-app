@@ -65,6 +65,7 @@ export default function HistoryScreen() {
 
   const [tab, setTab] = useState<TabKey>('injection')
   const [menuTarget, setMenuTarget] = useState<Injection | null>(null)
+  const [symptomMenu, setSymptomMenu] = useState<SymptomLog | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
   const [deleting, setDeleting] = useState(false)
 
@@ -251,15 +252,8 @@ export default function HistoryScreen() {
           </Text>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="删除这条症状记录"
-            onPress={() =>
-              setDeleteTarget({
-                kind: 'symptom',
-                id: symptom.id,
-                title: zh.history.deleteSymptomTitle,
-                message: zh.history.deleteSymptomMessage,
-              })
-            }
+            accessibilityLabel="症状记录操作"
+            onPress={() => setSymptomMenu(symptom)}
             style={({ pressed }) => [
               styles.menuButton,
               { opacity: pressed ? 0.5 : 1, borderRadius: theme.radius.sm },
@@ -288,6 +282,11 @@ export default function HistoryScreen() {
           </View>
         ) : null}
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+          {symptom.painScore !== null ? (
+            <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
+              {zh.history.painLabel} {symptom.painScore}/10
+            </Text>
+          ) : null}
           {symptom.temperature !== null ? (
             <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
               体温 {symptom.temperature}℃
@@ -375,7 +374,7 @@ export default function HistoryScreen() {
         onRefresh={refresh}
         ListEmptyComponent={
           <StateView
-            glyph={tab === 'injection' ? '◉' : '☺'}
+            icon={tab === 'injection' ? 'syringe' : 'smile'}
             title={tab === 'injection' ? zh.empty.historyNoInjection : zh.empty.historyNoSymptom}
             message={
               tab === 'injection'
@@ -454,6 +453,44 @@ export default function HistoryScreen() {
           },
         ]}
         onClose={() => setMenuTarget(null)}
+      />
+
+      <ActionSheet
+        visible={symptomMenu !== null}
+        title={
+          symptomMenu
+            ? `${formatDate(symptomMenu.loggedAt)} ${formatTime(symptomMenu.loggedAt)} · 严重度 ${symptomMenu.severity}`
+            : undefined
+        }
+        actions={[
+          {
+            label: zh.common.edit,
+            onPress: () => {
+              const target = symptomMenu
+              setSymptomMenu(null)
+              if (target) {
+                router.push({ pathname: '/modal/symptom', params: { id: target.id } })
+              }
+            },
+          },
+          {
+            label: zh.common.delete,
+            destructive: true,
+            onPress: () => {
+              const target = symptomMenu
+              setSymptomMenu(null)
+              if (target) {
+                setDeleteTarget({
+                  kind: 'symptom',
+                  id: target.id,
+                  title: zh.history.deleteSymptomTitle,
+                  message: zh.history.deleteSymptomMessage,
+                })
+              }
+            },
+          },
+        ]}
+        onClose={() => setSymptomMenu(null)}
       />
 
       <ConfirmDialog

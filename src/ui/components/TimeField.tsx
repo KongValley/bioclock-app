@@ -12,13 +12,16 @@ import {
   toTimeOfDay,
 } from './date'
 import { TextField } from './Field'
+import { Icon, type IconName } from './Icon'
 
 function StepButton({
   label,
+  icon,
   onPress,
   accessibilityLabel,
 }: {
   label: string
+  icon: IconName
   onPress: () => void
   accessibilityLabel: string
 }) {
@@ -38,6 +41,7 @@ function StepButton({
         },
       ]}
     >
+      <Icon name={icon} size={16} color={theme.colors.text} strokeWidth={2.25} />
       <Text style={{ color: theme.colors.text, fontSize: theme.fontSize.sm }}>{label}</Text>
     </Pressable>
   )
@@ -100,12 +104,14 @@ export function TimeOfDayField({
         </Text>
         <View style={styles.stepGroup}>
           <StepButton
-            label="−1 时"
+            label="1 时"
+            icon="minus"
             accessibilityLabel="时间减少一小时"
             onPress={() => apply(parsed.hour - 1, parsed.minute)}
           />
           <StepButton
-            label="＋1 时"
+            label="1 时"
+            icon="plus"
             accessibilityLabel="时间增加一小时"
             onPress={() => apply(parsed.hour + 1, parsed.minute)}
           />
@@ -113,17 +119,20 @@ export function TimeOfDayField({
       </View>
       <View style={styles.stepGroup}>
         <StepButton
-          label="−5 分"
+          label="5 分"
+          icon="minus"
           accessibilityLabel="时间减少五分钟"
           onPress={() => apply(parsed.hour, parsed.minute - 5)}
         />
         <StepButton
-          label="＋5 分"
+          label="5 分"
+          icon="plus"
           accessibilityLabel="时间增加五分钟"
           onPress={() => apply(parsed.hour, parsed.minute + 5)}
         />
         <StepButton
           label="整点"
+          icon="check"
           accessibilityLabel="分钟归零"
           onPress={() => apply(parsed.hour, 0)}
         />
@@ -257,22 +266,26 @@ export function DateTimeField({
       </View>
       <View style={styles.quickRow}>
         <StepButton
-          label="−1 天"
+          label="1 天"
+          icon="minus"
           accessibilityLabel="注射时间提前一天"
           onPress={() => onChange(addDays(value, -1))}
         />
         <StepButton
-          label="＋1 天"
+          label="1 天"
+          icon="plus"
           accessibilityLabel="注射时间推后一天"
           onPress={() => onChange(addDays(value, 1))}
         />
         <StepButton
-          label="−15 分"
+          label="15 分"
+          icon="minus"
           accessibilityLabel="注射时间提前十五分钟"
           onPress={() => onChange(addMinutes(value, -15))}
         />
         <StepButton
-          label="＋15 分"
+          label="15 分"
+          icon="plus"
           accessibilityLabel="注射时间推后十五分钟"
           onPress={() => onChange(addMinutes(value, 15))}
         />
@@ -336,6 +349,8 @@ const styles = StyleSheet.create({
   stepButton: {
     minHeight: 44,
     minWidth: 64,
+    flexDirection: 'row',
+    gap: 4,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,

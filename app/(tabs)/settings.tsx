@@ -30,8 +30,10 @@ import { Card } from '@/ui/components/Card'
 import { Chip } from '@/ui/components/Chip'
 import { ConfirmDialog } from '@/ui/components/ConfirmDialog'
 import { TextField } from '@/ui/components/Field'
+import { Icon } from '@/ui/components/Icon'
 import { Screen, ScreenHeader, ScrollArea, SectionTitle } from '@/ui/components/Layout'
 import { StateView } from '@/ui/components/StateView'
+import { SymptomTagManager } from '@/ui/components/SymptomFields'
 import { TimeOfDayField } from '@/ui/components/TimeField'
 import { toast, ToastHost } from '@/ui/components/Toast'
 import { formatDate } from '@/ui/components/date'
@@ -85,7 +87,7 @@ function SettingRow({
       ) : null}
       {right}
       {onPress ? (
-        <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.lg }}>›</Text>
+        <Icon name="chevron-right" size={20} color={theme.colors.textTertiary} />
       ) : null}
     </>
   )
@@ -224,7 +226,7 @@ function BottomSheet({
                 },
               ]}
             >
-              <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.xl }}>✕</Text>
+              <Icon name="close" size={22} color={theme.colors.textSecondary} />
             </Pressable>
           </View>
           <View style={{ flex: 1 }}>{children}</View>
@@ -246,6 +248,7 @@ export default function SettingsScreen() {
   const regimen = useAppStore((state) => state.regimen)
   const medication = useAppStore((state) => state.medication)
   const disease = useAppStore((state) => state.disease)
+  const symptomTags = useAppStore((state) => state.symptomTags)
   const settings = useAppStore((state) => state.settings)
   const reminder = useAppStore((state) => state.reminder)
   const refreshing = useAppStore((state) => state.refreshing)
@@ -270,6 +273,7 @@ export default function SettingsScreen() {
 
   const [diseaseOpen, setDiseaseOpen] = useState(false)
   const [diseaseSaving, setDiseaseSaving] = useState(false)
+  const [tagManagerOpen, setTagManagerOpen] = useState(false)
 
   const [lockBusy, setLockBusy] = useState(false)
 
@@ -646,7 +650,7 @@ export default function SettingsScreen() {
         ) : (
           <Card>
             <StateView
-              glyph="＋"
+              icon="plus"
               title={zh.empty.todayNoRegimen}
               message="先选择病种、药物与注射间隔。"
               actionLabel="去设置"
@@ -662,6 +666,17 @@ export default function SettingsScreen() {
             label={disease?.name ?? '未选择病种'}
             value="更改"
             onPress={() => setDiseaseOpen(true)}
+            last
+          />
+        </RowGroup>
+
+        <SectionTitle title="症状记录" hint="标签只影响记录时可选的名称，历史记录文字不变" />
+        <RowGroup>
+          <SettingRow
+            label="症状标签"
+            hint="添加或删除记录症状时的可选项"
+            value={`${symptomTags.length} 个`}
+            onPress={() => setTagManagerOpen(true)}
             last
           />
         </RowGroup>
@@ -751,7 +766,7 @@ export default function SettingsScreen() {
                       },
                     ]}
                   >
-                    <Text style={{ color: theme.colors.text }}>−</Text>
+                    <Icon name="minus" size={20} color={theme.colors.text} strokeWidth={2.25} />
                   </Pressable>
                   <Text style={{ color: theme.colors.text, fontSize: theme.fontSize.md, minWidth: 36, textAlign: 'center' }}>
                     {snoozeMinutes}
@@ -770,7 +785,7 @@ export default function SettingsScreen() {
                       },
                     ]}
                   >
-                    <Text style={{ color: theme.colors.text }}>＋</Text>
+                    <Icon name="plus" size={20} color={theme.colors.text} strokeWidth={2.25} />
                   </Pressable>
                 </View>
               </View>
@@ -870,7 +885,7 @@ export default function SettingsScreen() {
 
       <BottomSheet visible={switcherOpen} title="切换用药方案" onClose={() => setSwitcherOpen(false)}>
         {loadingRegimens ? (
-          <StateView glyph="◔" title="正在加载方案…" compact />
+          <StateView icon="activity" title="正在加载方案…" compact />
         ) : (
           <FlatList<Regimen>
             data={regimenList}
@@ -913,12 +928,12 @@ export default function SettingsScreen() {
                       当前
                     </Text>
                   ) : (
-                    <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.lg }}>›</Text>
+                    <Icon name="chevron-right" size={20} color={theme.colors.textTertiary} />
                   )}
                 </Pressable>
               )
             }}
-            ListEmptyComponent={<StateView glyph="◔" title="暂无其他方案" compact />}
+            ListEmptyComponent={<StateView icon="inbox" title="暂无其他方案" compact />}
           />
         )}
       </BottomSheet>
@@ -984,7 +999,7 @@ export default function SettingsScreen() {
                     当前
                   </Text>
                 ) : (
-                  <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.lg }}>›</Text>
+                  <Icon name="chevron-right" size={20} color={theme.colors.textTertiary} />
                 )}
               </Pressable>
             )
@@ -1065,6 +1080,24 @@ export default function SettingsScreen() {
             variant="secondary"
             style={{ marginTop: theme.spacing.lg }}
           />
+        </ScrollView>
+      </BottomSheet>
+
+      <BottomSheet
+        visible={tagManagerOpen}
+        title={zh.form.tagManagerTitle}
+        onClose={() => setTagManagerOpen(false)}
+        height="70%"
+      >
+        <ScrollView
+          style={{ flex: 1 }}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{
+            paddingHorizontal: theme.spacing.lg,
+            paddingBottom: theme.spacing.xl,
+          }}
+        >
+          <SymptomTagManager />
         </ScrollView>
       </BottomSheet>
 

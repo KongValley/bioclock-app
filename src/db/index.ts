@@ -4,9 +4,10 @@ import {
   DATABASE_NAME,
   DELETE_ALL_BUSINESS_DATA_SQL,
   MIGRATION_2_SQL,
+  MIGRATION_3_SQL,
   SCHEMA_VERSION,
 } from './schema'
-import { seedBuiltinMedications } from './seed'
+import { seedBuiltinMedications, seedBuiltinSymptomTags } from './seed'
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null
 
@@ -40,6 +41,7 @@ async function openAndMigrate(): Promise<SQLite.SQLiteDatabase> {
   }
 
   await seedBuiltinMedications(db)
+  await seedBuiltinSymptomTags(db)
   return db
 }
 
@@ -65,6 +67,12 @@ async function migrate(db: SQLite.SQLiteDatabase, fromVersion: number): Promise<
     version = 2
   }
 
+  // v2 -> v3：症状疼痛评分 + 可维护的症状标签表。
+  if (version < 3) {
+    await db.execAsync(MIGRATION_3_SQL)
+    version = 3
+  }
+
   await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`)
 }
 
@@ -83,5 +91,6 @@ export async function resetDatabase(): Promise<void> {
   await db.withTransactionAsync(async () => {
     await db.execAsync(DELETE_ALL_BUSINESS_DATA_SQL)
     await seedBuiltinMedications(db)
+    await seedBuiltinSymptomTags(db)
   })
 }

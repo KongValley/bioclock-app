@@ -21,6 +21,7 @@ interface AdherenceSummary {
 interface SymptomSummary {
   count: number
   avgSeverity: number
+  avgPain: number | null
   mostCommonTag: string
 }
 
@@ -130,10 +131,14 @@ function summarizeAdherence(
 
 function summarizeSymptoms(logs: SymptomLog[]): SymptomSummary {
   if (logs.length === 0) {
-    return { count: 0, avgSeverity: 0, mostCommonTag: '暂无记录' }
+    return { count: 0, avgSeverity: 0, avgPain: null, mostCommonTag: '暂无记录' }
   }
 
   const severitySum = logs.reduce((sum, log) => sum + log.severity, 0)
+  const painScores = logs
+    .map((log) => log.painScore)
+    .filter((score): score is number => score !== null)
+  const painSum = painScores.reduce((sum, score) => sum + score, 0)
   const tagCounts = new Map<string, number>()
   for (const log of logs) {
     for (const tag of log.tags) {
@@ -153,6 +158,7 @@ function summarizeSymptoms(logs: SymptomLog[]): SymptomSummary {
   return {
     count: logs.length,
     avgSeverity: roundOne(severitySum / logs.length),
+    avgPain: painScores.length === 0 ? null : roundOne(painSum / painScores.length),
     mostCommonTag,
   }
 }
@@ -328,6 +334,7 @@ function buildHtml(input: {
     <div class="stats">
       <div class="stat"><span class="stat-label">记录次数</span><span class="stat-value">${symptomSummary.count}</span></div>
       <div class="stat"><span class="stat-label">平均严重度（1–5）</span><span class="stat-value">${symptomSummary.count === 0 ? '—' : symptomSummary.avgSeverity.toFixed(1)}</span></div>
+      <div class="stat"><span class="stat-label">平均疼痛（NRS 0–10）</span><span class="stat-value">${symptomSummary.avgPain === null ? '—' : symptomSummary.avgPain.toFixed(1)}</span></div>
       <div class="stat"><span class="stat-label">最常见标签</span><span class="stat-value">${escapeHtml(symptomSummary.mostCommonTag)}</span></div>
     </div>
     <p class="hint">症状记录仅用于自我观察，不构成因果判断。</p>

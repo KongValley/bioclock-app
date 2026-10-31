@@ -2,6 +2,7 @@ import * as Crypto from 'expo-crypto'
 import type { SQLiteDatabase } from 'expo-sqlite'
 
 import { CATALOG_DRUGS, diseaseIdsForDrug } from '@/data/catalog'
+import { DEFAULT_SYMPTOM_TAGS } from '@/i18n/zh'
 
 /**
  * 把 `src/data/catalog.ts` 的药品目录播种到 medication 表。
@@ -64,4 +65,34 @@ export async function seedBuiltinMedications(db: SQLiteDatabase): Promise<void> 
       now,
     )
   }
+}
+
+/**
+ * 症状标签只需要播种一次。
+ * 用 app_setting 里的标记位记录「已经播过」，这样用户把默认标签全部删掉后
+ * 下次启动也不会被重新加回来。
+ */
+export async function seedBuiltinSymptomTags(db: SQLiteDatabase): Promise<void> {
+  const seeded = await db.getFirstAsync<{ value: string }>(
+    "SELECT value FROM app_setting WHERE key = 'symptom_tags_seeded'",
+  )
+  if (seeded) return
+
+  const now = Date.now()
+  let order = 0
+  for (const name of DEFAULT_SYMPTOM_TAGS) {
+    await db.runAsync(
+      `INSERT INTO symptom_tag (id, name, is_builtin, sort_order, created_at)
+       VALUES (?, ?, 1, ?, ?)`,
+      Crypto.randomUUID(),
+      name,
+      order,
+      now,
+    )
+    order += 1
+  }
+
+  await db.runAsync(
+    "INSERT INTO app_setting (key, value) VALUES ('symptom_tags_seeded', '1')",
+  )
 }

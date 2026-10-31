@@ -1,16 +1,17 @@
 import { Pressable, StyleSheet, Text } from 'react-native'
 import { useTheme } from '@/ui/theme'
+import { Icon, type IconName } from './Icon'
 
 export function Fab({
   label,
   onPress,
   accessibilityLabel,
-  icon = '＋',
+  icon = 'plus',
 }: {
   label: string
   onPress: () => void
   accessibilityLabel?: string
-  icon?: string
+  icon?: IconName
 }) {
   const theme = useTheme()
 
@@ -29,15 +30,7 @@ export function Fab({
         },
       ]}
     >
-      <Text
-        style={{
-          color: theme.colors.onPrimary,
-          fontSize: theme.fontSize.lg,
-          lineHeight: theme.lineHeight.lg,
-        }}
-      >
-        {icon}
-      </Text>
+      <Icon name={icon} size={20} color={theme.colors.onPrimary} strokeWidth={2.25} />
       <Text
         style={{
           color: theme.colors.onPrimary,

@@ -1,17 +1,18 @@
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native'
 import { useTheme } from '@/ui/theme'
 import { Button } from './Button'
+import { Icon, type IconName } from './Icon'
 import { zh } from '@/i18n/zh'
 
 export function StateView({
-  glyph = '○',
+  icon = 'inbox',
   title,
   message,
   actionLabel,
   onAction,
   compact = false,
 }: {
-  glyph?: string
+  icon?: IconName
   title: string
   message?: string
   actionLabel?: string
@@ -19,6 +20,7 @@ export function StateView({
   compact?: boolean
 }) {
   const theme = useTheme()
+  const iconBox = compact ? 44 : 56
   return (
     <View
       style={[
@@ -29,7 +31,23 @@ export function StateView({
         },
       ]}
     >
-      <Text style={{ fontSize: compact ? 28 : 36, color: theme.colors.textTertiary }}>{glyph}</Text>
+      <View
+        style={{
+          width: iconBox,
+          height: iconBox,
+          borderRadius: iconBox / 2,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: theme.colors.surfaceMuted,
+        }}
+      >
+        <Icon
+          name={icon}
+          size={compact ? 22 : 28}
+          color={theme.colors.textTertiary}
+          strokeWidth={1.75}
+        />
+      </View>
       <Text
         accessibilityRole="header"
         style={{
@@ -81,7 +99,7 @@ export function ErrorView({
 }) {
   return (
     <StateView
-      glyph="!"
+      icon="alert"
       title={zh.common.loadFailed}
       message={message}
       actionLabel={onRetry ? zh.common.retry : undefined}

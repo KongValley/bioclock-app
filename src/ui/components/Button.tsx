@@ -9,6 +9,7 @@ import {
   type ViewStyle,
 } from 'react-native'
 import { useTheme } from '@/ui/theme'
+import { Icon, type IconName } from './Icon'
 
 export type ButtonVariant = 'primary' | 'secondary' | 'outline' | 'danger'
 
@@ -19,7 +20,7 @@ export interface ButtonProps {
   size?: 'md' | 'lg'
   disabled?: boolean
   loading?: boolean
-  icon?: string
+  icon?: IconName
   style?: StyleProp<ViewStyle>
   accessibilityLabel?: string
   accessibilityHint?: string
@@ -83,16 +84,14 @@ export function Button({
       ) : (
         <>
           {icon ? (
-            <Text
-              style={{
-                color: foreground[variant],
-                fontSize: theme.fontSize.lg,
-                lineHeight: theme.lineHeight.lg,
-                marginRight: 6,
-              }}
-            >
-              {icon}
-            </Text>
+            <View style={styles.icon}>
+              <Icon
+                name={icon}
+                size={size === 'lg' ? 20 : 18}
+                color={foreground[variant]}
+                strokeWidth={2.25}
+              />
+            </View>
           ) : null}
           <Text
             style={{
@@ -126,5 +125,8 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     gap: 10,
+  },
+  icon: {
+    marginRight: 6,
   },
 })

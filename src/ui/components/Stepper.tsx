@@ -1,5 +1,6 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native'
 import { useTheme } from '@/ui/theme'
+import { Icon, type IconName } from './Icon'
 
 export interface StepperProps {
   value: number
@@ -34,7 +35,7 @@ export function Stepper({
   const canDecrease = !disabled && value - step >= min
   const canIncrease = !disabled && value + step <= max
 
-  const button = (glyph: string, onPress: () => void, enabled: boolean, name: string) => (
+  const button = (icon: IconName, onPress: () => void, enabled: boolean, name: string) => (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={name}
@@ -51,7 +52,7 @@ export function Stepper({
         },
       ]}
     >
-      <Text style={{ color: theme.colors.text, fontSize: theme.fontSize.lg }}>{glyph}</Text>
+      <Icon name={icon} size={20} color={theme.colors.text} strokeWidth={2.25} />
     </Pressable>
   )
 
@@ -63,7 +64,7 @@ export function Stepper({
         </Text>
       ) : null}
       <View style={styles.row}>
-        {button('−', () => onChange(clamp(value - step)), canDecrease, decreaseLabel)}
+        {button('minus', () => onChange(clamp(value - step)), canDecrease, decreaseLabel)}
         <View
           style={[
             styles.valueBox,
@@ -91,7 +92,7 @@ export function Stepper({
             ) : null}
           </Text>
         </View>
-        {button('＋', () => onChange(clamp(value + step)), canIncrease, increaseLabel)}
+        {button('plus', () => onChange(clamp(value + step)), canIncrease, increaseLabel)}
       </View>
     </View>
   )

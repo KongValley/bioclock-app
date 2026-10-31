@@ -16,6 +16,9 @@ export const SYMPTOM_TAGS = [
   '瘙痒',
 ] as const
 
+/** 首次启动时写入症状标签表的默认项；之后以数据库为准，用户可增删。 */
+export const DEFAULT_SYMPTOM_TAGS = SYMPTOM_TAGS
+
 export type SymptomTag = (typeof SYMPTOM_TAGS)[number]
 
 export const zh = {
@@ -82,6 +85,8 @@ export const zh = {
     symptomTab: '症状',
     addInjection: '新增注射',
     addSymptom: '新增症状',
+    editSymptom: '编辑症状',
+    painLabel: '疼痛',
     deleteInjectionTitle: '删除这条注射记录？',
     deleteInjectionMessage: '删除后下次注射时间会重新计算，此操作不可恢复。',
     deleteSymptomTitle: '删除这条症状记录？',
@@ -175,7 +180,22 @@ export const zh = {
     severity3: '中等',
     severity4: '较重',
     severity5: '严重',
+    pain: '疼痛评分',
+    painHint: 'NRS 0–10：0 为无痛，10 为能想象的最剧烈疼痛。不填表示本次未评估。',
+    painNone: '无痛',
+    painMild: '轻度疼痛',
+    painModerate: '中度疼痛',
+    painSevere: '重度疼痛',
+    painClear: '不记录疼痛',
     symptomTags: '症状',
+    manageTags: '管理',
+    tagManagerTitle: '症状标签',
+    tagManagerHint: '删除只影响以后的选择，已有记录里的文字不会改变。',
+    tagAddPlaceholder: '输入症状名称，如 咳嗽',
+    tagAdd: '添加',
+    tagDelete: '删除',
+    tagEmpty: '还没有可选症状，先添加一个。',
+    tagDuplicate: '这个症状已经存在',
     temperature: '体温（℃）',
     relatedInjection: '关联注射',
     patientName: '姓名',
