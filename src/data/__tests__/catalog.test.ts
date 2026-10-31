@@ -31,13 +31,20 @@ describe('药物目录完整性', () => {
     expect(drug?.brandNames).toEqual(expect.arrayContaining(['类克', '类停', '安佰特', '佳佑健']))
   })
 
-  it('阿达木单抗与依那西普覆盖常见国产商品名', () => {
+  it('阿达木单抗覆盖常见国产商品名', () => {
     expect(DRUGS_BY_KEY.adalimumab?.brandNames).toEqual(
       expect.arrayContaining(['修美乐', '格乐立', '安健宁', '苏立信', '汉达远', '君迈康']),
     )
-    expect(DRUGS_BY_KEY.etanercept?.brandNames).toEqual(
-      expect.arrayContaining(['恩利', '益赛普', '强克', '安佰诺']),
+  })
+
+  it('依那西普与受体-抗体融合蛋白分成两个独立条目', () => {
+    expect(DRUGS_BY_KEY.etanercept?.brandNames).toEqual(['恩利'])
+    expect(DRUGS_BY_KEY.tnfr_fc?.brandNames).toEqual(
+      expect.arrayContaining(['益赛普', '强克', '安佰诺']),
     )
+    // 通用名不同，不能混在同一药品下
+    expect(DRUGS_BY_KEY.etanercept?.genericName).toBe('依那西普')
+    expect(DRUGS_BY_KEY.tnfr_fc?.genericName).toContain('肿瘤坏死因子受体-抗体融合蛋白')
   })
 
   it('病种映射引用的药与病种都必须存在', () => {

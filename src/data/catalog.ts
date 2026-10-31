@@ -70,12 +70,23 @@ export const CATALOG_DRUGS: CatalogDrug[] = [
     key: 'etanercept',
     name: '依那西普',
     genericName: '依那西普',
-    brandNames: ['恩利', '益赛普', '强克', '安佰诺'],
+    brandNames: ['恩利'],
     route: 'sc',
     defaultDose: 50,
     unit: 'mg',
     color: '#C53030',
-    note: '益赛普、强克、安佰诺为重组人Ⅱ型 TNF 受体-抗体融合蛋白，作用机制同类',
+    note: '原研药。国产的益赛普、强克、安佰诺是受体-抗体融合蛋白，见另一条目',
+  },
+  {
+    key: 'tnfr_fc',
+    name: '重组人Ⅱ型 TNF 受体-抗体融合蛋白',
+    genericName: '重组人Ⅱ型肿瘤坏死因子受体-抗体融合蛋白',
+    brandNames: ['益赛普', '强克', '安佰诺'],
+    route: 'sc',
+    defaultDose: 25,
+    unit: 'mg',
+    color: '#9B2C2C',
+    note: '与依那西普作用机制同类（TNF 受体-抗体融合蛋白），但通用名不同；剂量与间隔以处方为准',
   },
   {
     key: 'golimumab',
@@ -468,6 +479,13 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     doseNote: '50mg 每周一次（或 25mg 每周两次）',
     regimen: regimen('依那西普 每周一次', [ph('maintenance', 7, 0, 50)]),
   },
+  {
+    diseaseId: 'psoriasis',
+    drugKey: 'tnfr_fc',
+    firstLine: false,
+    doseNote: '50mg 每周一次，或 25mg 每周两次（总量相同）',
+    regimen: regimen('受体-抗体融合蛋白 每周一次', [ph('maintenance', 7, 0, 50)]),
+  },
 
   // ======================= 银屑病关节炎 =======================
   {
@@ -493,6 +511,13 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     firstLine: true,
     doseNote: '50mg 每周一次',
     regimen: regimen('依那西普 每周一次', [ph('maintenance', 7, 0, 50)]),
+  },
+  {
+    diseaseId: 'psa',
+    drugKey: 'tnfr_fc',
+    firstLine: false,
+    doseNote: '50mg 每周一次，或 25mg 每周两次（总量相同）',
+    regimen: regimen('受体-抗体融合蛋白 每周一次', [ph('maintenance', 7, 0, 50)]),
   },
   {
     diseaseId: 'psa',
@@ -561,6 +586,13 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
   },
   {
     diseaseId: 'as',
+    drugKey: 'tnfr_fc',
+    firstLine: false,
+    doseNote: '50mg 每周一次，或 25mg 每周两次（总量相同）',
+    regimen: regimen('受体-抗体融合蛋白 每周一次', [ph('maintenance', 7, 0, 50)]),
+  },
+  {
+    diseaseId: 'as',
     drugKey: 'secukinumab',
     firstLine: true,
     doseNote: '第 0–4 周每周 150mg，之后每 4 周 150mg；部分患者用 300mg',
@@ -622,6 +654,13 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     firstLine: true,
     doseNote: '50mg 每周一次（或 25mg 每周两次）',
     regimen: regimen('依那西普 每周一次', [ph('maintenance', 7, 0, 50)]),
+  },
+  {
+    diseaseId: 'ra',
+    drugKey: 'tnfr_fc',
+    firstLine: false,
+    doseNote: '50mg 每周一次，或 25mg 每周两次（总量相同）',
+    regimen: regimen('受体-抗体融合蛋白 每周一次', [ph('maintenance', 7, 0, 50)]),
   },
   {
     diseaseId: 'ra',
