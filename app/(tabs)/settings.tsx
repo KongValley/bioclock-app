@@ -64,10 +64,19 @@ const PDF_RANGES = [90, 180, 365]
 
 const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'] as const
 
-const ORAL_FREQUENCY_LABELS: Record<OralFrequency, string> = {
-  daily: '每天',
-  weekly: '每周',
-  custom: '自定义',
+/** 口服频次的人类可读描述：每周 N 次 / 每周固定几天 / 每天。 */
+function oralFrequencyText(oral: {
+  frequency: OralFrequency
+  timesPerPeriod: number
+  daysOfWeek: number[]
+}): string {
+  if (oral.frequency === 'daily') return '每天'
+  if (oral.frequency === 'weekly') return `每周 ${oral.timesPerPeriod} 次`
+  const days = [...oral.daysOfWeek]
+    .sort((a, b) => a - b)
+    .map((day) => WEEKDAY_LABELS[day])
+    .join('、')
+  return days === '' ? '自定义' : `每周 ${days}`
 }
 
 /**
@@ -415,11 +424,10 @@ function draftSummary(line: LineDraft, medications: Medication[]): string {
   const medication = medications.find((item) => item.id === line.medicationId)
   const name = medication?.name ?? (line.label.trim() === '' ? '未选择药物' : line.label)
   if (line.kind === 'oral') {
-    const frequency = ORAL_FREQUENCY_LABELS[line.oral.frequency]
-    const times = line.oral.frequency === 'daily' ? '' : ` ${line.oral.timesPerPeriod} 次`
+    const frequency = oralFrequencyText(line.oral)
     const duration =
       line.oral.durationText.trim() === '' ? '长期' : `${line.oral.durationText.trim()} 天`
-    return `${name} · 口服 · ${frequency}${times} · ${duration}`
+    return `${name} · 口服 · ${frequency} · ${duration}`
   }
   const last = line.phases[line.phases.length - 1]
   const interval = last ? `每 ${last.intervalDays} 天` : '未设间隔'
@@ -436,10 +444,9 @@ function describeLine(line: TreatmentLine, medications: Medication[]): string {
   if (line.kind === 'oral') {
     const oral = line.oral
     if (!oral) return `${name} · 口服`
-    const frequency = ORAL_FREQUENCY_LABELS[oral.frequency]
-    const times = oral.frequency === 'daily' ? '' : ` ${oral.timesPerPeriod} 次`
+    const frequency = oralFrequencyText(oral)
     const duration = oral.durationDays === null ? '长期' : `${oral.durationDays} 天`
-    return `${name} · 口服 · ${frequency}${times} · ${duration}`
+    return `${name} · 口服 · ${frequency} · ${duration}`
   }
   const last = line.phases[line.phases.length - 1]
   const interval = last ? `每 ${last.intervalDays} 天` : '未设间隔'
@@ -467,9 +474,13 @@ function validateLine(line: LineDraft): string | null {
     const days = Number(line.oral.durationText.trim())
     if (!Number.isInteger(days) || days < 1) return '疗程天数必须是大于 0 的整数'
   }
-  if (line.oral.frequency !== 'daily') {
-    if (line.oral.timesPerPeriod < 1) return '每周或自定义服药需要至少 1 次'
-    if (line.oral.daysOfWeek.length === 0) return '请至少选择一天服药'
+  if (line.oral.frequency === 'weekly') {
+    if (line.oral.timesPerPeriod < 1 || line.oral.timesPerPeriod > 7) {
+      return '每周服药次数需要在 1 到 7 之间'
+    }
+  }
+  if (line.oral.frequency === 'custom' && line.oral.daysOfWeek.length === 0) {
+    return '请至少选择一天服药'
   }
   return null
 }
@@ -493,8 +504,10 @@ function buildLineInput(line: LineDraft): TreatmentLineDraft {
         durationDays:
           line.oral.durationText.trim() === '' ? null : Number(line.oral.durationText.trim()),
         frequency: line.oral.frequency,
-        timesPerPeriod: line.oral.frequency === 'daily' ? 0 : line.oral.timesPerPeriod,
-        daysOfWeek: line.oral.frequency === 'daily' ? [] : line.oral.daysOfWeek,
+        timesPerPeriod:
+          line.oral.frequency === 'weekly' ? line.oral.timesPerPeriod : 0,
+        daysOfWeek:
+          line.oral.frequency === 'custom' ? line.oral.daysOfWeek : [],
         remindTime: line.oral.remindTime,
       },
     }
@@ -1120,8 +1133,8 @@ function TreatmentEditor({
           <SegmentedControl<OralFrequency>
             options={[
               { value: 'daily', label: '每天' },
-              { value: 'weekly', label: '每周' },
-              { value: 'custom', label: '自定义' },
+              { value: 'weekly', label: '每周 N 次' },
+              { value: 'custom', label: '固定周几' },
             ]}
             value={draft.oral.frequency}
             onChange={(frequency) =>
@@ -1131,9 +1144,9 @@ function TreatmentEditor({
           />
         </View>
 
-        {draft.oral.frequency !== 'daily' ? (
+        {draft.oral.frequency === 'weekly' ? (
           <Stepper
-            label="每个周期次数"
+            label="每周次数"
             value={draft.oral.timesPerPeriod}
             onChange={(value) =>
               setLineDraft((current) =>
@@ -1143,12 +1156,12 @@ function TreatmentEditor({
             min={1}
             max={7}
             suffix="次"
-            decreaseLabel="每周期次数减少"
-            increaseLabel="每周期次数增加"
+            decreaseLabel="每周次数减少"
+            increaseLabel="每周次数增加"
           />
         ) : null}
 
-        {draft.oral.frequency !== 'daily' ? (
+        {draft.oral.frequency === 'custom' ? (
           <View style={{ gap: 8 }}>
             <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
               服药星期（可多选）

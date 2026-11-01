@@ -488,11 +488,7 @@ function evenlySpacedWeekdays(timesPerPeriod: number): number[] {
 export function oralWeekdays(oral: OralConfig): number[] {
   if (oral.frequency === 'daily') return evenlySpacedWeekdays(7)
   if (oral.frequency === 'custom') return normalizeWeekdays(oral.daysOfWeek ?? [])
-
-  const explicit = (oral.daysOfWeek ?? []).filter(
-    (day) => Number.isInteger(day) && day >= 0 && day <= 6,
-  )
-  if (explicit.length > 0) return normalizeWeekdays(explicit)
+  // 每周 N 次：按 N 均匀分布到一周，不再同时读取 daysOfWeek，避免两个参数冲突。
   return evenlySpacedWeekdays(oral.timesPerPeriod ?? 1)
 }
 

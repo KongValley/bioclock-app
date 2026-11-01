@@ -450,8 +450,8 @@ export interface SymptomTag {
 | `oral_start` | `INTEGER` | 口服：首次服药时间（UTC 毫秒） |
 | `oral_duration_days` | `INTEGER` | 口服：疗程天数；`NULL` 表示长期 |
 | `oral_frequency` | `TEXT` | 口服：`daily / weekly / custom` |
-| `oral_times_per_period` | `INTEGER` | 口服：每个周期次数 |
-| `oral_days_of_week` | `TEXT` | 口服：JSON 数组，`0 = 周日 … 6 = 周六` |
+| `oral_times_per_period` | `INTEGER` | 口服：仅 `weekly` 使用，表示每周次数（1–7） |
+| `oral_days_of_week` | `TEXT` | 口服：仅 `custom` 使用，JSON 数组，`0 = 周日 … 6 = 周六` |
 | `oral_remind_time` | `TEXT` | 口服：提醒时间 `HH:mm` |
 
 约束：`kind IN ('injection', 'oral')`；`anchor IN ('actual', 'planned')`；
@@ -535,8 +535,10 @@ export interface OralPlan {
   startDate: number
   durationDays: number | null
   frequency: OralFrequency
+  /** 仅 weekly 使用：每周 N 次，均匀分布 */
   timesPerPeriod: number
-  daysOfWeek: number[]      // 0 = 周日 … 6 = 周六
+  /** 仅 custom 使用：固定周几，0 = 周日 … 6 = 周六 */
+  daysOfWeek: number[]
   remindTime: string        // 'HH:mm'
 }
 

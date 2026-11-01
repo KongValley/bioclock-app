@@ -519,6 +519,15 @@ export default function HistoryScreen() {
               ]
             : [
                 {
+                  label: zh.common.edit,
+                  onPress: () => {
+                    if (!doseMenu) return
+                    const target = doseMenu.log
+                    setDoseMenu(null)
+                    router.push({ pathname: '/modal/oral', params: { id: target.id } })
+                  },
+                },
+                {
                   label: zh.common.delete,
                   destructive: true,
                   onPress: () => {

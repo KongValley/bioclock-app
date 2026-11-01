@@ -36,7 +36,12 @@ export default function OralModal() {
   const theme = useTheme()
   const router = useRouter()
   const insets = useSafeAreaInsets()
-  const params = useLocalSearchParams<{ lineId?: string | string[]; scheduledAt?: string | string[] }>()
+  const params = useLocalSearchParams<{
+    id?: string | string[]
+    lineId?: string | string[]
+    scheduledAt?: string | string[]
+  }>()
+  const editingId = firstParam(params.id)
   const paramLineId = firstParam(params.lineId)
   const paramScheduledRaw = firstParam(params.scheduledAt)
   const paramScheduledAt =
@@ -51,13 +56,17 @@ export default function OralModal() {
   const appLockEnabled = useAppStore((state) => state.settings.app_lock === '1')
   const reload = useAppStore((state) => state.reload)
   const addDoseLog = useAppStore((state) => state.addDoseLog)
+  const updateDoseLog = useAppStore((state) => state.updateDoseLog)
+  const editing = editingId ? doseLogs.find((item) => item.id === editingId) : undefined
 
   const oralLines = useMemo(
     () => treatment?.lines.filter((item) => item.kind === 'oral') ?? [],
     [treatment],
   )
 
-  const [selectedLineId, setSelectedLineId] = useState<string>(paramLineId ?? '')
+  const [selectedLineId, setSelectedLineId] = useState<string>(
+    editing?.lineId ?? paramLineId ?? '',
+  )
   useEffect(() => {
     if (oralLines.length === 0) return
     if (oralLines.some((item) => item.id === selectedLineId)) return
@@ -76,8 +85,10 @@ export default function OralModal() {
     [line, medications],
   )
 
-  const [takenAt, setTakenAt] = useState<number>(() => Date.now())
-  const [note, setNote] = useState<string>('')
+  const [takenAt, setTakenAt] = useState<number>(
+    () => editing?.takenAt ?? editing?.scheduledAt ?? Date.now(),
+  )
+  const [note, setNote] = useState<string>(() => editing?.note ?? '')
   const [saving, setSaving] = useState<'done' | 'skipped' | null>(null)
   const [formError, setFormError] = useState<string | null>(null)
 
@@ -101,6 +112,7 @@ export default function OralModal() {
 
   // 计划时间：优先用传入的 scheduledAt，否则按所选时间匹配同一天的打卡点。
   const scheduledAt = useMemo(() => {
+    if (editing) return editing.scheduledAt ?? null
     if (paramScheduledAt !== null) return paramScheduledAt
     if (!treatment || !line) return null
     try {
@@ -112,7 +124,7 @@ export default function OralModal() {
     } catch {
       return null
     }
-  }, [paramScheduledAt, treatment, line, doseLogs, takenAt])
+  }, [editing, paramScheduledAt, treatment, line, doseLogs, takenAt])
 
   const submit = async (status: 'done' | 'skipped') => {
     setFormError(null)
@@ -131,9 +143,18 @@ export default function OralModal() {
         unit: medication?.unit && medication.unit.trim() !== '' ? medication.unit : null,
         note: note.trim() === '' ? null : note.trim(),
       }
-      const result = await addDoseLog(payload)
+      const result = editing
+        ? await updateDoseLog(editing.id, payload)
+        : await addDoseLog(payload)
       close()
-      toast(status === 'done' ? '已记录服用' : '已跳过这次', 'success')
+      toast(
+        editing
+          ? '口服记录已更新'
+          : status === 'done'
+            ? '已记录服用'
+            : '已跳过这次',
+        'success',
+      )
       if (result.notifyWarning) toast(result.notifyWarning, 'error')
     } catch (error) {
       setFormError(errorMessage(error))
@@ -183,7 +204,7 @@ export default function OralModal() {
                   fontWeight: '700',
                 }}
               >
-                口服打卡
+                {editing ? '编辑口服打卡' : '口服打卡'}
               </Text>
               <Pressable
                 accessibilityRole="button"
@@ -213,7 +234,7 @@ export default function OralModal() {
                   gap: theme.spacing.lg,
                 }}
               >
-                {oralLines.length > 1 ? (
+                {!editing && oralLines.length > 1 ? (
                   <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                     {oralLines.map((item) => {
                       const selected = item.id === line?.id

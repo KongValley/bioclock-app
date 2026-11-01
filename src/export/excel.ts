@@ -34,12 +34,6 @@ const KIND_LABELS: Record<LineKind, string> = {
   oral: '口服',
 }
 
-const FREQUENCY_LABELS: Record<OralFrequency, string> = {
-  daily: '每天',
-  weekly: '每周',
-  custom: '自定义',
-}
-
 export async function exportExcel(): Promise<{ path: string; filename: string }> {
   const [allTreatments, allMedications, allSymptoms, allLogs] = await Promise.all([
     treatments.list(),
@@ -165,11 +159,14 @@ export async function exportExcel(): Promise<{ path: string; filename: string }>
 function describeOral(line: TreatmentLine): string {
   if (line.kind !== 'oral' || !line.oral) return ''
   const oral = line.oral
-  const base = FREQUENCY_LABELS[oral.frequency]
-  const times =
-    oral.frequency === 'daily' ? '' : ` ${oral.timesPerPeriod} 次`
+  const frequency =
+    oral.frequency === 'daily'
+      ? '每天'
+      : oral.frequency === 'weekly'
+        ? `每周 ${oral.timesPerPeriod} 次`
+        : `每周 ${oral.daysOfWeek.map((day) => ['日', '一', '二', '三', '四', '五', '六'][day]).join('、')}`
   const duration = oral.durationDays === null ? '长期' : `${oral.durationDays} 天`
-  return `${base}${times} ${oral.remindTime}（${duration}）`
+  return `${frequency} ${oral.remindTime}（${duration}）`
 }
 
 function logTime(log: DoseLog): number {

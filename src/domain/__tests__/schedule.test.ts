@@ -433,8 +433,8 @@ describe('口服线：打卡点生成', () => {
     })
 
     const days = offsets(plans)
-    expect(days.slice(0, 4)).toEqual([0, 3, 7, 10])
-    expect(days.every((day) => [1, 4].includes(new Date(T0 + day * DAY).getUTCDay()))).toBe(true)
+    expect(days.slice(0, 4)).toEqual([0, 4, 7, 11])
+    expect(days.every((day) => [1, 5].includes(new Date(T0 + day * DAY).getUTCDay()))).toBe(true)
   })
 
   it('weekly：没给 daysOfWeek 时按次数均匀分布（周一为起点）', () => {
