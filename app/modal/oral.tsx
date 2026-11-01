@@ -59,10 +59,14 @@ export default function OralModal() {
   const updateDoseLog = useAppStore((state) => state.updateDoseLog)
   const editing = editingId ? doseLogs.find((item) => item.id === editingId) : undefined
 
-  const oralLines = useMemo(
-    () => treatment?.lines.filter((item) => item.kind === 'oral') ?? [],
-    [treatment],
-  )
+  const oralLines = useMemo(() => {
+    const all = treatment?.lines.filter((item) => item.kind === 'oral') ?? []
+    if (editing) {
+      const current = all.find((item) => item.id === editing.lineId)
+      return current ? [current] : []
+    }
+    return all.filter((item) => item.endedAt === null)
+  }, [treatment, editing])
 
   const [selectedLineId, setSelectedLineId] = useState<string>(
     editing?.lineId ?? paramLineId ?? '',

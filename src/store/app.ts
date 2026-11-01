@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { findDiseases, resolveDiseaseIds } from '@/data/diseases'
 import {
   doseLogs as doseLogRepo,
+  efficacyEvents as efficacyEventRepo,
   medications as medicationRepo,
   reminderRules,
   settings as settingsRepo,
@@ -9,6 +10,7 @@ import {
   symptomTags as symptomTagRepo,
   treatments as treatmentRepo,
   type DoseLogInput,
+  type EfficacyEventInput,
   type ReminderRuleInput,
   type TreatmentLineInput,
   type TreatmentPatch,
@@ -20,6 +22,7 @@ import type {
   AppSettings,
   Disease,
   DoseLog,
+  EfficacyEvent,
   Medication,
   ReminderRuleV5,
   SymptomLog,
@@ -64,6 +67,8 @@ export interface AppStore {
   treatments: Treatment[]
   /** 全部用药记录（注射 + 口服） */
   doseLogs: DoseLog[]
+  /** 全部疗效事件（疗效下降 / 失效等） */
+  efficacyEvents: EfficacyEvent[]
   medications: Medication[]
   symptoms: SymptomLog[]
   symptomTags: SymptomTag[]
@@ -75,6 +80,9 @@ export interface AppStore {
   addDoseLog(input: DoseLogInput): Promise<MutationResult>
   updateDoseLog(id: string, patch: Partial<DoseLogInput>): Promise<MutationResult>
   removeDoseLog(id: string): Promise<MutationResult>
+  addEfficacyEvent(input: EfficacyEventInput): Promise<MutationResult>
+  removeEfficacyEvent(id: string): Promise<MutationResult>
+  setLineEnded(lineId: string, endedAt: number | null): Promise<MutationResult>
   saveTreatment(input: SaveTreatmentInput): Promise<MutationResult>
   setActiveTreatment(id: string, active: boolean): Promise<MutationResult>
   updateReminder(input: ReminderRuleInput): Promise<MutationResult>
@@ -149,6 +157,7 @@ export const useAppStore = create<AppStore>((set) => ({
   treatment: null,
   treatments: [],
   doseLogs: [],
+  efficacyEvents: [],
   medications: [],
   symptoms: [],
   symptomTags: [],
@@ -168,6 +177,7 @@ export const useAppStore = create<AppStore>((set) => ({
         allSymptoms,
         allSymptomTags,
         allDoseLogs,
+        allEfficacyEvents,
       ] = await Promise.all([
         treatmentRepo.getActive(),
         treatmentRepo.list(),
@@ -176,6 +186,7 @@ export const useAppStore = create<AppStore>((set) => ({
         symptomRepo.list(),
         symptomTagRepo.list(),
         doseLogRepo.list(),
+        efficacyEventRepo.list(),
       ])
       const reminder = active ? await reminderRules.getFor(active.id) : null
       const diseases = findDiseases(resolveDiseaseIds(allSettings))
@@ -187,6 +198,7 @@ export const useAppStore = create<AppStore>((set) => ({
         treatment: active,
         treatments: allTreatments,
         doseLogs: allDoseLogs,
+        efficacyEvents: allEfficacyEvents,
         medications: allMedications,
         symptoms: allSymptoms,
         symptomTags: allSymptomTags,
@@ -218,6 +230,21 @@ export const useAppStore = create<AppStore>((set) => ({
 
   removeDoseLog: async (id) => {
     await doseLogRepo.remove(id)
+    return { notifyWarning: await afterWrite() }
+  },
+
+  addEfficacyEvent: async (input) => {
+    await efficacyEventRepo.create(input)
+    return { notifyWarning: await afterWrite() }
+  },
+
+  removeEfficacyEvent: async (id) => {
+    await efficacyEventRepo.remove(id)
+    return { notifyWarning: await afterWrite() }
+  },
+
+  setLineEnded: async (lineId, endedAt) => {
+    await treatmentRepo.setLineEnded(lineId, endedAt)
     return { notifyWarning: await afterWrite() }
   },
 

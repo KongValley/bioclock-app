@@ -72,14 +72,15 @@ tools/import-editor/      补录数据并导出 JSON / Excel 的静态网页工�
 
 ## 6. 数据层规则
 
-当前是 **v5「治疗组合」模型**（`SCHEMA_VERSION = 5`），表结构见 `src/db/schema.ts`：
+当前是 **v6「治疗组合」模型**（`SCHEMA_VERSION = 6`），表结构见 `src/db/schema.ts`：
 
 | 表 | 用途 |
 | --- | --- |
 | `medication` | 药物；`route` 为 `sc / iv / oral`，`brand_names`、`disease_ids`、`extra` 存 JSON 文本 |
 | `treatment` | 治疗组合；同一时间只有一个 `is_active = 1` |
-| `treatment_line` | 每条药一条；`kind` 为 `injection / oral`。注射线用 `is_host`、`sync_with_host`、`anchor`、`window_days`，口服线用 `oral_*` 列 |
+| `treatment_line` | 每条药一条；`kind` 为 `injection / oral`。注射线用 `is_host`、`sync_with_host`、`anchor`、`window_days`，口服线用 `oral_*` 列；`ended_at` 非空表示已停用 |
 | `treatment_phase` | 仅注射线的阶段（`loading / maintenance`），按 `order_idx` 依次执行 |
+| `efficacy_event` | 疗效下降 / 失效 / 不耐受等事件，`doses_count` 保存事件时的已完成次数快照 |
 | `dose_log` | 注射与口服统一的打卡记录（`status` 为 `done / skipped / missed`） |
 | `reminder_rule` | 每个治疗方案一条，外键改为 `treatment_id` |
 | `symptom_log` / `symptom_tag` | 症状与可维护的标签；`symptom_log.dose_log_id` 关联打卡记录（对外类型仍叫 `injectionId`） |
@@ -91,13 +92,15 @@ tools/import-editor/      补录数据并导出 JSON / Excel 的静态网页工�
 ### 迁移策略
 
 - `v5` 是整套方案模型重建：`regimen / regimen_phase / injection` 已被删除，改为 `treatment / treatment_line / treatment_phase / dose_log`。
+- `v6` 只做增量：`treatment_line.ended_at` + `efficacy_event`，v5 数据完整保留。
 - 用户已确认开发阶段旧数据不必保留。`src/db/index.ts` 的 `buildMigrationSql()`：
   - `user_version = 0`：只执行 `CREATE_TABLES_SQL`；
   - `user_version = 1–4`：先执行 `DROP_ALL_TABLES_SQL`，再执行 `CREATE_TABLES_SQL`；
+  - `user_version = 5`：执行 `MIGRATION_6_SQL`；
   - 不再有 `MIGRATION_2/3/4_SQL`。
 - 重建后由 `openAndMigrate()` 重新播种内置药和症状标签。**这是唯一允许直接删旧表的例外**；
   v5 之后的结构变更恢复「只加列/加表」的增量迁移，不要再 DROP 用户数据。
-- `DELETE_ALL_BUSINESS_DATA_SQL` 只删 v5 的业务表，保留内置药并重新播种标签；`DROP_ALL_TABLES_SQL` 同时列出新旧表名，保证老库能清干净。
+- `DELETE_ALL_BUSINESS_DATA_SQL` 只删 v6 的业务表（含 `efficacy_event`），保留内置药并重新播种标签；`DROP_ALL_TABLES_SQL` 同时列出新旧表名，保证老库能清干净。
 
 修改表结构时，以下文件必须一起改，缺一不可：
 

@@ -102,6 +102,16 @@ function assertIntervalDays(intervalDays: number): void {
   }
 }
 
+/** 多条线里最早的一个停用时间；都没有停用则返回 null。 */
+function earliestEnd(...values: Array<number | null | undefined>): number | null {
+  let result: number | null = null
+  for (const value of values) {
+    if (value === null || value === undefined) continue
+    if (result === null || value < result) result = value
+  }
+  return result
+}
+
 function round1(value: number): number {
   const rounded = Math.round(value * 10) / 10
   // 避免 -0（Object.is(-0, 0) === false，会让调用方的严格断言意外失败）
@@ -326,6 +336,7 @@ export function buildInjectionPlans(input: {
 
   const anchor: RegimenAnchor = line.anchor ?? 'planned'
   const windowDays = line.windowDays ?? 0
+  const endedAt = line.endedAt ?? null
   const sortedLogs = sortLogs(logs)
 
   const plans: SchedulePlan[] = []
@@ -350,6 +361,9 @@ export function buildInjectionPlans(input: {
         anchor === 'actual' && previousActual !== null ? previousActual : previousPlanned
       plannedAt = base + phase.intervalDays * DAY
     }
+
+    // 停用后不再生成任何未来计划；停用前的历史计划与打卡保留。
+    if (endedAt !== null && plannedAt > endedAt) break
 
     const toleranceDays = Math.max(2, windowDays + 1, Math.ceil(phase.intervalDays / 2))
     const log = takeNearestLog(sortedLogs, usedLogIds, plannedAt, toleranceDays)
@@ -395,8 +409,10 @@ function buildSyncedPlans(input: {
   hostPlans: SchedulePlan[]
   logs: DoseLog[]
   now: number
+  /** 任一条线停用后的截止时间；null 表示都仍在用 */
+  endAt?: number | null
 }): SchedulePlan[] {
-  const { line, hostPlans, logs, now } = input
+  const { line, hostPlans, logs, now, endAt = null } = input
   const ownPhases = [...(line.phases ?? [])].sort((a, b) => a.orderIdx - b.orderIdx)
   for (const phase of ownPhases) assertIntervalDays(phase.intervalDays)
   if (ownPhases.length === 0 || hostPlans.length === 0) return []
@@ -406,14 +422,20 @@ function buildSyncedPlans(input: {
   const fallbackPhase = ownPhases[ownPhases.length - 1]
   const step = fallbackPhase.intervalDays * DAY
 
-  const timestamps = hostPlans.map((plan) => plan.plannedAt)
+  const timestamps = hostPlans
+    .map((plan) => plan.plannedAt)
+    .filter((timestamp) => endAt === null || timestamp <= endAt)
+  if (timestamps.length === 0) return []
+
   let futureCount = timestamps.filter((timestamp) => timestamp > now).length
   let cursor = timestamps[timestamps.length - 1]
   while (futureCount < INJECTION_FUTURE_DOSE_COUNT) {
     if (timestamps.length >= MAX_PLANS) {
       throw new Error('排程长度超出上限，请检查给药间隔')
     }
-    cursor += step
+    const next = cursor + step
+    if (endAt !== null && next > endAt) break
+    cursor = next
     timestamps.push(cursor)
     if (cursor > now) futureCount += 1
   }
@@ -516,6 +538,7 @@ export function buildOralPlans(input: {
   const weekdays = oralWeekdays(oral)
   const startDay = startOfLocalDay(oral.startDate ?? now)
   const durationDays = oral.durationDays
+  const endedAt = line.endedAt ?? null
   // 从 startDate 往前留够历史，同时也允许「今天才开始的线」往后覆盖两周。
   const endAt = startOfLocalDay(Math.max(now, startDay)) + horizonDays * DAY
 
@@ -526,6 +549,7 @@ export function buildOralPlans(input: {
     cursor.setDate(cursor.getDate() + day)
     const timestamp = cursor.getTime()
     if (timestamp > endAt) break
+    if (endedAt !== null && timestamp > endedAt) break
     if (plannedTimes.length >= MAX_ORAL_PLANS) {
       throw new Error('排程长度超出上限，请检查口服频率')
     }
@@ -572,7 +596,15 @@ export function buildLineSchedule(input: LineScheduleInput): SchedulePlan[] {
   if (isSyncedLine(line)) {
     const host = input.resolveHost ? input.resolveHost(line) : null
     const hostPlans = host ? buildInjectionPlans({ line: host, logs: input.hostLogs ?? [], now }) : []
-    if (hostPlans.length > 0) return buildSyncedPlans({ line, hostPlans, logs, now })
+    if (hostPlans.length > 0) {
+      return buildSyncedPlans({
+        line,
+        hostPlans,
+        logs,
+        now,
+        endAt: earliestEnd(line.endedAt, host?.endedAt),
+      })
+    }
     // 没有宿主线可跟随时，退回独立推进，避免整条线消失。
   }
 
@@ -614,7 +646,13 @@ export function buildSchedule(input: ScheduleInput): SchedulePlan[] {
       const host = resolveHostLine(line, lines)
       const hostPlans = host ? hostPlansById.get(host.id) ?? [] : []
       if (hostPlans.length > 0) {
-        for (const plan of buildSyncedPlans({ line, hostPlans, logs: lineLogs, now })) {
+        for (const plan of buildSyncedPlans({
+          line,
+          hostPlans,
+          logs: lineLogs,
+          now,
+          endAt: earliestEnd(line.endedAt, host?.endedAt),
+        })) {
           all.push(plan)
         }
         continue

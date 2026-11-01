@@ -11,9 +11,10 @@ export const DATABASE_NAME = 'bioclock.db'
  *
  * v5 是「治疗方案」模型的重建版本：弃用旧的 regimen / regimen_phase / injection，
  * 改为 treatment / treatment_line / treatment_phase / dose_log。
- * 旧库不做增量迁移（用户已确认开发阶段老数据不需要保留），打开时直接删表重建。
+ * v6 加入疗效事件（efficacy_event）和用药线停用时间（treatment_line.ended_at）。
+ * v6 之后的结构变更必须走增量迁移，不再删用户数据。
  */
-export const SCHEMA_VERSION = 5
+export const SCHEMA_VERSION = 6
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS medication (
@@ -51,6 +52,7 @@ CREATE TABLE IF NOT EXISTS treatment_line (
   sync_with_host      INTEGER NOT NULL DEFAULT 0,
   anchor              TEXT    NOT NULL DEFAULT 'actual' CHECK (anchor IN ('actual', 'planned')),
   window_days         INTEGER NOT NULL DEFAULT 2,
+  ended_at            INTEGER,
   oral_start          INTEGER,
   oral_duration_days  INTEGER,
   oral_frequency      TEXT    CHECK (oral_frequency IS NULL OR oral_frequency IN ('daily', 'weekly', 'custom')),
@@ -69,6 +71,17 @@ CREATE TABLE IF NOT EXISTS treatment_phase (
   repeat_count  INTEGER NOT NULL DEFAULT 0,
   dose          REAL,
   unit          TEXT    NOT NULL
+);
+
+-- 疗效事件：记录某条用药线疗效下降 / 失效 / 不耐受等
+CREATE TABLE IF NOT EXISTS efficacy_event (
+  id          TEXT    PRIMARY KEY NOT NULL,
+  line_id     TEXT    NOT NULL REFERENCES treatment_line(id) ON DELETE CASCADE,
+  kind        TEXT    NOT NULL CHECK (kind IN ('reduced', 'failed', 'intolerance', 'antibody', 'other')),
+  occurred_at INTEGER NOT NULL,
+  doses_count INTEGER NOT NULL DEFAULT 0,
+  note        TEXT,
+  created_at  INTEGER NOT NULL
 );
 
 -- 打卡记录：注射与口服共用，一条计划对应一条记录
@@ -129,6 +142,9 @@ CREATE INDEX IF NOT EXISTS idx_treatment_phase_order
 CREATE INDEX IF NOT EXISTS idx_dose_log_line_time
   ON dose_log (line_id, scheduled_at);
 
+CREATE INDEX IF NOT EXISTS idx_efficacy_event_line_time
+  ON efficacy_event (line_id, occurred_at);
+
 CREATE INDEX IF NOT EXISTS idx_symptom_log_logged_at
   ON symptom_log (logged_at);
 
@@ -145,12 +161,57 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_medication_catalog_key
  */
 
 /**
+ * v5 → v6 的增量迁移：保留已有治疗组合、打卡、症状与设置。
+ * 只加列 / 加表，不删除任何用户数据。
+ */
+export const CREATE_EFFICACY_EVENT_SQL = `
+CREATE TABLE IF NOT EXISTS efficacy_event (
+  id          TEXT    PRIMARY KEY NOT NULL,
+  line_id     TEXT    NOT NULL REFERENCES treatment_line(id) ON DELETE CASCADE,
+  kind        TEXT    NOT NULL CHECK (kind IN ('reduced', 'failed', 'intolerance', 'antibody', 'other')),
+  occurred_at INTEGER NOT NULL,
+  doses_count INTEGER NOT NULL DEFAULT 0,
+  note        TEXT,
+  created_at  INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_efficacy_event_line_time
+  ON efficacy_event (line_id, occurred_at);
+`
+
+export const MIGRATION_6_SQL = `
+ALTER TABLE treatment_line ADD COLUMN ended_at INTEGER;
+
+${CREATE_EFFICACY_EVENT_SQL}
+`
+
+/**
+ * 版本号已是 v6、但实际缺列/缺表时的修复 SQL。
+ * 返回空字符串表示结构完整，不需要执行。
+ */
+export function buildV6RepairSql(options: {
+  hasEndedAt: boolean
+  hasEfficacyTable: boolean
+}): string {
+  const statements: string[] = []
+  if (!options.hasEndedAt) {
+    statements.push('ALTER TABLE treatment_line ADD COLUMN ended_at INTEGER;')
+  }
+  if (!options.hasEfficacyTable) {
+    statements.push(CREATE_EFFICACY_EVENT_SQL)
+  }
+  if (statements.length === 0) return ''
+  return `${statements.join('\n')}\nPRAGMA user_version = ${SCHEMA_VERSION};`
+}
+
+/**
  * 清空业务数据时按依赖顺序删除，保留内置药。
  *
  * 只涉及 v5 结构里的表：老库在打开时已经走 DROP_ALL_TABLES_SQL 重建过，
  * 不会再残留 regimen / injection 等旧表，所以这里不需要（也不能）DELETE 它们。
  */
-export const DELETE_ALL_BUSINESS_DATA_SQL = `DELETE FROM symptom_log;
+export const DELETE_ALL_BUSINESS_DATA_SQL = `DELETE FROM efficacy_event;
+DELETE FROM symptom_log;
 DELETE FROM symptom_tag;
 DELETE FROM dose_log;
 DELETE FROM treatment_phase;
@@ -163,6 +224,7 @@ DELETE FROM medication WHERE is_builtin = 0;
 
 /** 仅在调试、彻底重装或 v5 重建时使用。新旧表都要删，老库才能清干净。 */
 export const DROP_ALL_TABLES_SQL = `
+DROP TABLE IF EXISTS efficacy_event;
 DROP TABLE IF EXISTS symptom_log;
 DROP TABLE IF EXISTS symptom_tag;
 DROP TABLE IF EXISTS dose_log;

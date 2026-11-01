@@ -4,6 +4,8 @@ import type {
   AppSettings,
   DoseLog,
   DoseStatus,
+  EfficacyEvent,
+  EfficacyKind,
   InjectionSite,
   LineKind,
   Medication,
@@ -65,6 +67,7 @@ interface TreatmentLineRow {
   sync_with_host: number
   anchor: RegimenAnchor
   window_days: number
+  ended_at: number | null
   oral_start: number | null
   oral_duration_days: number | null
   oral_frequency: OralFrequency | null
@@ -97,6 +100,16 @@ interface DoseLogRow {
   note: string | null
   created_at: number
   updated_at: number
+}
+
+interface EfficacyEventRow {
+  id: string
+  line_id: string
+  kind: EfficacyKind
+  occurred_at: number
+  doses_count: number
+  note: string | null
+  created_at: number
 }
 
 interface SymptomLogRow {
@@ -223,6 +236,7 @@ function mapTreatmentLine(row: TreatmentLineRow, phases: TreatmentPhase[]): Trea
     syncWithHost: row.sync_with_host === 1,
     anchor: row.anchor,
     windowDays: row.window_days,
+    endedAt: row.ended_at,
     phases,
     oral: mapOralPlan(row),
   }
@@ -252,6 +266,18 @@ function mapDoseLog(row: DoseLogRow): DoseLog {
     note: row.note,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  }
+}
+
+function mapEfficacyEvent(row: EfficacyEventRow): EfficacyEvent {
+  return {
+    id: row.id,
+    lineId: row.line_id,
+    kind: row.kind,
+    occurredAt: row.occurred_at,
+    dosesCount: row.doses_count,
+    note: row.note,
+    createdAt: row.created_at,
   }
 }
 
@@ -768,13 +794,16 @@ function normalizeOralPlan(value: unknown): OralPlan {
       ? null
       : requireInteger(plan.durationDays, '服药天数', 1)
   const frequency = requireOralFrequency(plan.frequency)
-  const timesPerPeriod = requireInteger(plan.timesPerPeriod, '每个周期的次数', 0)
-  if (frequency !== 'daily' && timesPerPeriod <= 0) {
-    fail('每周或自定义服药频率需要填写每个周期的次数')
-  }
-  const daysOfWeek = normalizeDaysOfWeek(plan.daysOfWeek)
-  if (frequency !== 'daily' && daysOfWeek.length === 0) {
-    fail('请至少选择一天服药')
+  let timesPerPeriod = 0
+  let daysOfWeek: number[] = []
+  if (frequency === 'weekly') {
+    // weekly 只使用「每周 N 次」，按周均匀分布；daysOfWeek 一律清空。
+    timesPerPeriod = requireInteger(plan.timesPerPeriod, '每周服药次数', 1)
+    if (timesPerPeriod > 7) fail('每周服药次数不能超过 7')
+  } else if (frequency === 'custom') {
+    // custom 只使用固定周几，timesPerPeriod 不参与排程。
+    daysOfWeek = normalizeDaysOfWeek(plan.daysOfWeek)
+    if (daysOfWeek.length === 0) fail('请至少选择一天服药')
   }
   const remindTime = requireTimeOfDay(plan.remindTime, '服药提醒时间')
   return { startDate, durationDays, frequency, timesPerPeriod, daysOfWeek, remindTime }
@@ -838,6 +867,7 @@ function normalizeLine(treatmentId: string, input: TreatmentLineInput): Normaliz
     sync_with_host: syncWithHost ? 1 : 0,
     anchor,
     window_days: windowDays,
+    ended_at: null,
     oral_start: null,
     oral_duration_days: null,
     oral_frequency: null,
@@ -871,9 +901,9 @@ async function insertLine(db: SQLiteDatabase, line: NormalizedLine): Promise<voi
   await db.runAsync(
     `INSERT INTO treatment_line
       (id, treatment_id, medication_id, kind, label, is_host, sync_with_host, anchor,
-       window_days, oral_start, oral_duration_days, oral_frequency, oral_times_per_period,
+       window_days, ended_at, oral_start, oral_duration_days, oral_frequency, oral_times_per_period,
        oral_days_of_week, oral_remind_time)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     row.id,
     row.treatment_id,
     row.medication_id,
@@ -883,6 +913,7 @@ async function insertLine(db: SQLiteDatabase, line: NormalizedLine): Promise<voi
     row.sync_with_host,
     row.anchor,
     row.window_days,
+    row.ended_at,
     row.oral_start,
     row.oral_duration_days,
     row.oral_frequency,
@@ -1041,6 +1072,25 @@ export const treatments = {
     await db.runAsync('DELETE FROM treatment_line WHERE id = ?', lineId)
   },
 
+  /** 停用 / 恢复一条用药线。endedAt 为 null 表示恢复。 */
+  async setLineEnded(lineId: string, endedAt: number | null): Promise<TreatmentLine> {
+    requireNonEmptyString(lineId, '用药线 ID')
+    const db = await getDatabase()
+    const lineRow = await requireTreatmentLineExists(db, lineId)
+    const value = endedAt === null ? null : requireTimestamp(endedAt, '停用时间')
+    await db.runAsync('UPDATE treatment_line SET ended_at = ? WHERE id = ?', value, lineId)
+    const updated = await db.getFirstAsync<TreatmentLineRow>(
+      'SELECT * FROM treatment_line WHERE id = ?',
+      lineId,
+    )
+    if (!updated) fail('用药线不存在')
+    const phaseRows = await db.getAllAsync<TreatmentPhaseRow>(
+      'SELECT * FROM treatment_phase WHERE line_id = ? ORDER BY order_idx ASC',
+      lineId,
+    )
+    return mapTreatmentLine(updated, phaseRows.map(mapTreatmentPhase))
+  },
+
   async setActive(id: string, active: boolean): Promise<void> {    requireNonEmptyString(id, '治疗方案 ID')
     if (typeof active !== 'boolean') fail('激活状态必须是布尔值')
     const db = await getDatabase()
@@ -1093,6 +1143,14 @@ export const treatments = {
       if (linePatch.windowDays !== undefined) {
         sets.push('window_days = ?')
         values.push(requireInteger(linePatch.windowDays, '按时窗口', 0))
+      }
+      if (linePatch.endedAt !== undefined) {
+        if (linePatch.endedAt !== null) {
+          sets.push('ended_at = ?')
+          values.push(requireTimestamp(linePatch.endedAt, '停用时间'))
+        } else {
+          sets.push('ended_at = NULL')
+        }
       }
       if (linePatch.isHost !== undefined) {
         isHost = normalizeBoolean(linePatch.isHost, '主药标记') ? 1 : 0
@@ -1194,6 +1252,123 @@ export const treatments = {
     await requireTreatmentExists(db, id)
     // treatment_line / treatment_phase / dose_log / reminder_rule 都是 ON DELETE CASCADE
     await db.runAsync('DELETE FROM treatment WHERE id = ?', id)
+  },
+}
+
+// ---------------------------------------------------------------------------
+// efficacy events（疗效下降 / 失效）
+// ---------------------------------------------------------------------------
+
+const EFFICACY_KINDS: EfficacyKind[] = [
+  'reduced',
+  'failed',
+  'intolerance',
+  'antibody',
+  'other',
+]
+
+function requireEfficacyKind(value: unknown): EfficacyKind {
+  if (typeof value !== 'string' || !EFFICACY_KINDS.includes(value as EfficacyKind)) {
+    fail('疗效事件类型不合法')
+  }
+  return value as EfficacyKind
+}
+
+export interface EfficacyEventInput {
+  lineId: string
+  kind: EfficacyKind
+  occurredAt: number
+  note?: string | null
+  /** 是否同时停用这条用药线；默认 false */
+  stopLine?: boolean
+}
+
+export const efficacyEvents = {
+  /** 按 lineId 过滤，或返回全部；按发生时间倒序。 */
+  async list(lineId?: string): Promise<EfficacyEvent[]> {
+    const db = await getDatabase()
+    if (lineId !== undefined) {
+      requireNonEmptyString(lineId, '用药线 ID')
+      const rows = await db.getAllAsync<EfficacyEventRow>(
+        'SELECT * FROM efficacy_event WHERE line_id = ? ORDER BY occurred_at DESC, created_at DESC',
+        lineId,
+      )
+      return rows.map(mapEfficacyEvent)
+    }
+    const rows = await db.getAllAsync<EfficacyEventRow>(
+      'SELECT * FROM efficacy_event ORDER BY occurred_at DESC, created_at DESC',
+    )
+    return rows.map(mapEfficacyEvent)
+  },
+
+  async create(input: EfficacyEventInput): Promise<EfficacyEvent> {
+    const lineId = requireNonEmptyString(input?.lineId, '用药线 ID')
+    const kind = requireEfficacyKind(input.kind)
+    const occurredAt = requireTimestamp(input.occurredAt, '发生时间')
+    const note = normalizeOptionalText(input.note)
+    const stopLine = input.stopLine === true
+
+    const db = await getDatabase()
+    await requireTreatmentLineExists(db, lineId)
+
+    const row: EfficacyEventRow = {
+      id: Crypto.randomUUID(),
+      line_id: lineId,
+      kind,
+      occurred_at: occurredAt,
+      doses_count: 0,
+      note,
+      created_at: Date.now(),
+    }
+
+    await db.withTransactionAsync(async () => {
+      const counted = await db.getFirstAsync<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM dose_log
+          WHERE line_id = ? AND status = 'done'
+            AND COALESCE(taken_at, scheduled_at, created_at) <= ?`,
+        lineId,
+        occurredAt,
+      )
+      row.doses_count = counted?.n ?? 0
+
+      await db.runAsync(
+        `INSERT INTO efficacy_event
+          (id, line_id, kind, occurred_at, doses_count, note, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        row.id,
+        row.line_id,
+        row.kind,
+        row.occurred_at,
+        row.doses_count,
+        row.note,
+        row.created_at,
+      )
+
+      if (stopLine) {
+        // 已有更早的停用时间时保留更早的那个。
+        await db.runAsync(
+          `UPDATE treatment_line
+            SET ended_at = MIN(COALESCE(ended_at, ?), ?)
+            WHERE id = ?`,
+          occurredAt,
+          occurredAt,
+          lineId,
+        )
+      }
+    })
+
+    return mapEfficacyEvent(row)
+  },
+
+  async remove(id: string): Promise<void> {
+    const eventId = requireNonEmptyString(id, '疗效事件 ID')
+    const db = await getDatabase()
+    const row = await db.getFirstAsync<{ id: string }>(
+      'SELECT id FROM efficacy_event WHERE id = ? LIMIT 1',
+      eventId,
+    )
+    if (!row) fail('疗效事件不存在')
+    await db.runAsync('DELETE FROM efficacy_event WHERE id = ?', eventId)
   },
 }
 

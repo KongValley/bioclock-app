@@ -18,7 +18,7 @@ import { Fab } from '@/ui/components/Fab'
 import { BodyMap } from '@/ui/components/BodyMap'
 import { toast } from '@/ui/components/Toast'
 import { useNow } from '@/ui/components/hooks'
-import { calendarDayDiff, formatDateTime, formatDateTimeFull } from '@/ui/components/date'
+import { calendarDayDiff, formatDate, formatDateTime, formatDateTimeFull } from '@/ui/components/date'
 
 /** treatment 为空时复用的稳定空数组，避免 useMemo 依赖每次变化。 */
 const NO_LINES: TreatmentLine[] = []
@@ -82,7 +82,9 @@ export default function TodayScreen() {
     return map
   }, [medications])
 
-  const lines = treatment?.lines ?? NO_LINES
+  const allLines = treatment?.lines ?? NO_LINES
+  const lines = useMemo(() => allLines.filter((line) => line.endedAt === null), [allLines])
+  const endedLines = useMemo(() => allLines.filter((line) => line.endedAt !== null), [allLines])
 
   // 所有线的计划点（含历史），按 plannedAt 升序。
   const plans = useMemo<SchedulePlan[]>(() => {
@@ -347,7 +349,7 @@ export default function TodayScreen() {
               compact
             />
           </Card>
-        ) : lines.length === 0 ? (
+        ) : lines.length === 0 && endedLines.length === 0 ? (
           <Card>
             <StateView icon="syringe" title={zh.today.noSchedule} compact />
           </Card>
@@ -358,7 +360,9 @@ export default function TodayScreen() {
               {todoPlans.length === 0 ? (
                 <Card>
                   <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
-                    今天没有需要登记的项目，按计划进行即可。
+                    {lines.length === 0
+                      ? '当前没有在用的用药线。'
+                      : '今天没有需要登记的项目，按计划进行即可。'}
                   </Text>
                 </Card>
               ) : (
@@ -366,10 +370,44 @@ export default function TodayScreen() {
               )}
             </View>
 
-            <View style={{ gap: theme.spacing.md }}>
-              <SectionTitle title="用药计划" hint="每一条用药线的下一步" />
-              {lines.map((line) => renderLineCard(line))}
-            </View>
+            {lines.length > 0 ? (
+              <View style={{ gap: theme.spacing.md }}>
+                <SectionTitle title="用药计划" hint="每一条用药线的下一步" />
+                {lines.map((line) => renderLineCard(line))}
+              </View>
+            ) : null}
+
+            {endedLines.length > 0 ? (
+              <View style={{ gap: theme.spacing.md }}>
+                <SectionTitle title="已停用" hint="历史记录保留，可在设置 → 疗效记录里恢复" />
+                {endedLines.map((line) => {
+                  const medication = medicationById.get(line.medicationId)
+                  return (
+                    <Card key={line.id}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.spacing.sm }}>
+                        <View style={{ flex: 1, gap: 2 }}>
+                          <Text
+                            style={{
+                              color: theme.colors.textSecondary,
+                              fontSize: theme.fontSize.md,
+                              fontWeight: '600',
+                            }}
+                          >
+                            {medication?.name ?? line.label}
+                          </Text>
+                          <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.xs }}>
+                            {line.kind === 'injection' ? '注射' : '口服'} · 已停用
+                          </Text>
+                        </View>
+                        <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.sm }}>
+                          {line.endedAt !== null ? formatDate(line.endedAt, now) : ''}
+                        </Text>
+                      </View>
+                    </Card>
+                  )
+                })}
+              </View>
+            ) : null}
           </>
         )}
 

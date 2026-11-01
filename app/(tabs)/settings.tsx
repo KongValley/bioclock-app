@@ -37,6 +37,8 @@ import { parseSpreadsheet } from '@/import/spreadsheet'
 import { DISEASE_GROUPS, diseasesByGroup, resolveDiseaseIds } from '@/data/diseases'
 import type {
   Disease,
+  EfficacyEvent,
+  EfficacyKind,
   LineKind,
   Medication,
   OralFrequency,
@@ -59,10 +61,23 @@ import { SegmentedControl } from '@/ui/components/SegmentedControl'
 import { Stepper } from '@/ui/components/Stepper'
 import { DateTimeField, TimeOfDayField } from '@/ui/components/TimeField'
 import { toast, ToastHost } from '@/ui/components/Toast'
+import { formatDate } from '@/ui/components/date'
 
 const PDF_RANGES = [90, 180, 365]
 
 const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'] as const
+
+const EFFICACY_KIND_OPTIONS: Array<{ value: EfficacyKind; label: string }> = [
+  { value: 'reduced', label: '疗效下降' },
+  { value: 'failed', label: '疗效失效' },
+  { value: 'intolerance', label: '不耐受' },
+  { value: 'antibody', label: '抗药抗体' },
+  { value: 'other', label: '其他' },
+]
+
+function efficacyKindLabel(kind: EfficacyKind): string {
+  return EFFICACY_KIND_OPTIONS.find((item) => item.value === kind)?.label ?? '其他'
+}
 
 /** 口服频次的人类可读描述：每周 N 次 / 每周固定几天 / 每天。 */
 function oralFrequencyText(oral: {
@@ -441,18 +456,19 @@ function draftSummary(line: LineDraft, medications: Medication[]): string {
 function describeLine(line: TreatmentLine, medications: Medication[]): string {
   const medication = medications.find((item) => item.id === line.medicationId)
   const name = medication?.name ?? line.label
+  const ended = line.endedAt !== null ? ' · 已停用' : ''
   if (line.kind === 'oral') {
     const oral = line.oral
-    if (!oral) return `${name} · 口服`
+    if (!oral) return `${name} · 口服${ended}`
     const frequency = oralFrequencyText(oral)
     const duration = oral.durationDays === null ? '长期' : `${oral.durationDays} 天`
-    return `${name} · 口服 · ${frequency} · ${duration}`
+    return `${name} · 口服 · ${frequency} · ${duration}${ended}`
   }
   const last = line.phases[line.phases.length - 1]
   const interval = last ? `每 ${last.intervalDays} 天` : '未设间隔'
   const dose = last && last.dose !== null ? ` · ${last.dose} ${last.unit}` : ''
   const host = line.isHost ? ' · 主药' : ''
-  return `${name} · 注射 · ${interval}${dose}${host}`
+  return `${name} · 注射 · ${interval}${dose}${host}${ended}`
 }
 
 function validateLine(line: LineDraft): string | null {
@@ -1238,6 +1254,305 @@ function TreatmentEditor({
 }
 
 // ---------------------------------------------------------------------------
+// 疗效记录
+// ---------------------------------------------------------------------------
+
+/**
+ * 记录生物制剂（或口服药）疗效下降 / 失效。
+ *
+ * 不根据症状推断结论：只保存用户自己填写的事件、发生时间和已用药次数快照，
+ * 是否停用、是否换药仍由用户和医生决定。
+ */
+function EfficacyManager({
+  visible,
+  lines,
+  medications,
+  events,
+}: {
+  visible: boolean
+  lines: TreatmentLine[]
+  medications: Medication[]
+  events: EfficacyEvent[]
+}) {
+  const theme = useTheme()
+  const addEfficacyEvent = useAppStore((state) => state.addEfficacyEvent)
+  const removeEfficacyEvent = useAppStore((state) => state.removeEfficacyEvent)
+  const setLineEnded = useAppStore((state) => state.setLineEnded)
+
+  const [lineId, setLineId] = useState('')
+  const [kind, setKind] = useState<EfficacyKind>('reduced')
+  const [occurredAt, setOccurredAt] = useState<number>(() => Date.now())
+  const [note, setNote] = useState('')
+  const [stopLine, setStopLine] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const orderedLines = useMemo(
+    () =>
+      [...lines].sort(
+        (a, b) => (a.kind === 'injection' ? 0 : 1) - (b.kind === 'injection' ? 0 : 1),
+      ),
+    [lines],
+  )
+
+  useEffect(() => {
+    if (!visible) return
+    setLineId((current) =>
+      current !== '' && orderedLines.some((line) => line.id === current)
+        ? current
+        : orderedLines[0]?.id ?? '',
+    )
+  }, [visible, orderedLines])
+
+  useEffect(() => {
+    if (!visible) return
+    setKind('reduced')
+    setOccurredAt(Date.now())
+    setNote('')
+    setStopLine(true)
+    setError(null)
+  }, [visible])
+
+  const selectedLine = orderedLines.find((line) => line.id === lineId) ?? null
+  const selectedMedication = selectedLine
+    ? medications.find((medication) => medication.id === selectedLine.medicationId) ?? null
+    : null
+  const scopedEvents = events.filter((event) => lines.some((line) => line.id === event.lineId))
+
+  const lineName = (line: TreatmentLine) =>
+    medications.find((medication) => medication.id === line.medicationId)?.name ?? line.label
+
+  const save = async () => {
+    setError(null)
+    if (!selectedLine) {
+      setError('请先选择一条用药线。')
+      return
+    }
+    if (!Number.isFinite(occurredAt) || occurredAt <= 0) {
+      setError('请选择有效的事件时间。')
+      return
+    }
+    setSaving(true)
+    try {
+      const result = await addEfficacyEvent({
+        lineId: selectedLine.id,
+        kind,
+        occurredAt,
+        note: note.trim() === '' ? null : note.trim(),
+        stopLine: selectedLine.endedAt === null ? stopLine : false,
+      })
+      toast(
+        selectedLine.endedAt === null && stopLine ? '已记录，并停用这条用药线' : '已记录疗效事件',
+        'success',
+      )
+      if (result.notifyWarning) toast(result.notifyWarning, 'error')
+      setNote('')
+      setOccurredAt(Date.now())
+      setStopLine(true)
+    } catch (err) {
+      const message = errorMessage(err)
+      setError(message)
+      toast(message, 'error')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const restoreLine = async (line: TreatmentLine) => {
+    try {
+      const result = await setLineEnded(line.id, null)
+      toast('已恢复这条用药线', 'success')
+      if (result.notifyWarning) toast(result.notifyWarning, 'error')
+    } catch (err) {
+      toast(errorMessage(err), 'error')
+    }
+  }
+
+  const confirmRemove = (event: EfficacyEvent) => {
+    const line = lines.find((item) => item.id === event.lineId)
+    Alert.alert(
+      '删除疗效记录',
+      `确定删除${line ? lineName(line) : '这条用药线'}在 ${formatDate(event.occurredAt)} 的「${efficacyKindLabel(
+        event.kind,
+      )}」记录吗？用药线不会自动恢复。`,
+      [
+        { text: zh.common.cancel, style: 'cancel' },
+        {
+          text: zh.common.delete,
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              try {
+                const result = await removeEfficacyEvent(event.id)
+                toast('已删除疗效记录', 'success')
+                if (result.notifyWarning) toast(result.notifyWarning, 'error')
+              } catch (err) {
+                toast(errorMessage(err), 'error')
+              }
+            })()
+          },
+        },
+      ],
+    )
+  }
+
+  return (
+    <ScrollView
+      keyboardShouldPersistTaps="handled"
+      contentContainerStyle={{
+        paddingHorizontal: theme.spacing.lg,
+        paddingBottom: theme.spacing.lg,
+        gap: theme.spacing.lg,
+      }}
+    >
+      {orderedLines.length === 0 ? (
+        <Card>
+          <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
+            还没有用药线，请先创建治疗方案。
+          </Text>
+        </Card>
+      ) : (
+        <Card>
+          <View style={{ gap: theme.spacing.md }}>
+            <View style={{ gap: 8 }}>
+              <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
+                用药线
+              </Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                {orderedLines.map((line) => (
+                  <Chip
+                    key={line.id}
+                    label={`${lineName(line)}${line.kind === 'injection' ? ' · 注射' : ' · 口服'}`}
+                    selected={line.id === lineId}
+                    onPress={() => setLineId(line.id)}
+                  />
+                ))}
+              </View>
+            </View>
+
+            <View style={{ gap: 8 }}>
+              <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
+                事件类型
+              </Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                {EFFICACY_KIND_OPTIONS.map((item) => (
+                  <Chip
+                    key={item.value}
+                    label={item.label}
+                    selected={item.value === kind}
+                    onPress={() => setKind(item.value)}
+                  />
+                ))}
+              </View>
+            </View>
+
+            <DateTimeField label="发生时间" value={occurredAt} onChange={setOccurredAt} />
+
+            <TextField
+              label={`备注（${zh.common.optional}）`}
+              value={note}
+              onChangeText={setNote}
+              placeholder="例如：医生评估后调整方案"
+              multiline
+              accessibilityLabel="疗效事件备注"
+            />
+
+            {selectedLine?.endedAt === null ? (
+              <SwitchRow
+                label="同时停用这条用药线"
+                hint="停用后不再生成后续计划，历史打卡保留"
+                value={stopLine}
+                onValueChange={setStopLine}
+                last
+              />
+            ) : selectedLine ? (
+              <View style={{ gap: theme.spacing.sm }}>
+                <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
+                  这条用药线已于{' '}
+                  {selectedLine.endedAt !== null ? formatDate(selectedLine.endedAt) : ''} 停用
+                </Text>
+                <Button
+                  label="恢复这条用药线"
+                  variant="secondary"
+                  onPress={() => {
+                    void restoreLine(selectedLine)
+                  }}
+                />
+              </View>
+            ) : null}
+
+            {error ? <InlineError message={error} /> : null}
+
+            <Button label="保存疗效记录" onPress={() => void save()} loading={saving} />
+
+            <Text
+              style={{
+                color: theme.colors.textTertiary,
+                fontSize: theme.fontSize.xs,
+                lineHeight: theme.lineHeight.xs,
+              }}
+            >
+              仅用于自我观察和就诊时回顾，不构成疗效或因果判断。是否停药、换药请遵医嘱。
+            </Text>
+          </View>
+        </Card>
+      )}
+
+      <View style={{ gap: theme.spacing.sm }}>
+        <SectionTitle title="已有记录" hint={`${scopedEvents.length} 条`} />
+        {scopedEvents.length === 0 ? (
+          <Card>
+            <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
+              还没有疗效记录。
+            </Text>
+          </Card>
+        ) : (
+          scopedEvents.map((event) => {
+            const line = lines.find((item) => item.id === event.lineId)
+            return (
+              <Card key={event.id}>
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: theme.spacing.sm }}>
+                  <View style={{ flex: 1, gap: 3 }}>
+                    <Text
+                      style={{ color: theme.colors.text, fontSize: theme.fontSize.md, fontWeight: '600' }}
+                    >
+                      {line ? lineName(line) : '已删除的用药线'} · {efficacyKindLabel(event.kind)}
+                    </Text>
+                    <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.xs }}>
+                      {formatDate(event.occurredAt)} · 当时已完成 {event.dosesCount} 次
+                    </Text>
+                    {event.note ? (
+                      <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
+                        {event.note}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`删除 ${efficacyKindLabel(event.kind)} 记录`}
+                    onPress={() => confirmRemove(event)}
+                    style={({ pressed }) => [
+                      styles.iconButton,
+                      {
+                        borderRadius: theme.radius.pill,
+                        backgroundColor: pressed ? theme.colors.surfaceMuted : 'transparent',
+                        opacity: pressed ? 0.7 : 1,
+                      },
+                    ]}
+                  >
+                    <Icon name="trash" size={18} color={theme.colors.textTertiary} />
+                  </Pressable>
+                </View>
+              </Card>
+            )
+          })
+        )}
+      </View>
+    </ScrollView>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // 设置页
 // ---------------------------------------------------------------------------
 
@@ -1255,6 +1570,7 @@ export default function SettingsScreen() {
   const disease = useAppStore((state) => state.disease)
   const diseases = useAppStore((state) => state.diseases)
   const symptomTags = useAppStore((state) => state.symptomTags)
+  const efficacyEvents = useAppStore((state) => state.efficacyEvents)
   const settings = useAppStore((state) => state.settings)
   const reminder = useAppStore((state) => state.reminder)
   const refreshing = useAppStore((state) => state.refreshing)
@@ -1273,6 +1589,7 @@ export default function SettingsScreen() {
   const [dndEnd, setDndEnd] = useState('08:00')
 
   const [editorOpen, setEditorOpen] = useState(false)
+  const [efficacyOpen, setEfficacyOpen] = useState(false)
   const [deactivateOpen, setDeactivateOpen] = useState(false)
   const [deactivating, setDeactivating] = useState(false)
 
@@ -1676,6 +1993,10 @@ export default function SettingsScreen() {
   }
 
   const version = Constants.expoConfig?.version ?? '1.0.0'
+  const activeEfficacyCount = treatment
+    ? efficacyEvents.filter((event) => treatment.lines.some((line) => line.id === event.lineId))
+        .length
+    : 0
 
   return (
     <Screen>
@@ -1734,6 +2055,20 @@ export default function SettingsScreen() {
             />
           </Card>
         )}
+
+        <SectionTitle
+          title="疗效记录"
+          hint="打完一定次数后疗效下降、失效或不耐受时记一笔；可同时停用用药线"
+        />
+        <RowGroup>
+          <SettingRow
+            label="疗效事件"
+            hint="只做记录，不推断原因，也不提供停药建议"
+            value={`${activeEfficacyCount} 条`}
+            onPress={() => setEfficacyOpen(true)}
+            last
+          />
+        </RowGroup>
 
         {treatments.some((item) => !item.isActive) ? (
           <>
@@ -2075,6 +2410,20 @@ export default function SettingsScreen() {
           treatment={treatment}
           medications={medicines}
           onSaved={() => setEditorOpen(false)}
+        />
+      </BottomSheet>
+
+      <BottomSheet
+        visible={efficacyOpen}
+        title="疗效记录"
+        onClose={() => setEfficacyOpen(false)}
+        height="90%"
+      >
+        <EfficacyManager
+          visible={efficacyOpen}
+          lines={treatment?.lines ?? []}
+          medications={medicines}
+          events={efficacyEvents}
         />
       </BottomSheet>
 

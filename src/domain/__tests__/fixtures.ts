@@ -56,6 +56,7 @@ export function makeInjectionLine(
     syncWithHost?: boolean
     anchor?: RegimenAnchor
     windowDays?: number
+    endedAt?: number | null
     phases?: TreatmentPhase[]
     label?: string
   } = {},
@@ -67,6 +68,7 @@ export function makeInjectionLine(
     syncWithHost = false,
     anchor = 'actual',
     windowDays = 2,
+    endedAt = null,
     phases,
     label = '测试注射线',
   } = opts
@@ -81,6 +83,7 @@ export function makeInjectionLine(
     syncWithHost,
     anchor,
     windowDays,
+    endedAt,
     phases: phases ?? [makePhase({ lineId: id, orderIdx: 0, intervalDays: 14 })],
     oral: null,
   }
@@ -94,6 +97,7 @@ export function makeOralLine(opts: {
   frequency?: 'daily' | 'weekly' | 'custom'
   timesPerPeriod?: number
   daysOfWeek?: number[]
+  endedAt?: number | null
   label?: string
 }): TreatmentLine {
   const {
@@ -104,6 +108,7 @@ export function makeOralLine(opts: {
     frequency = 'daily',
     timesPerPeriod = 1,
     daysOfWeek = [],
+    endedAt = null,
     label = '测试口服线',
   } = opts
 
@@ -117,6 +122,7 @@ export function makeOralLine(opts: {
     syncWithHost: false,
     anchor: 'planned',
     windowDays: 0,
+    endedAt,
     phases: [],
     oral: { startDate, durationDays, frequency, timesPerPeriod, daysOfWeek, remindTime: '09:00' },
   }

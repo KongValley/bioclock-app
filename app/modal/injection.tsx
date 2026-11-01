@@ -72,7 +72,10 @@ export default function InjectionModal() {
   const [formError, setFormError] = useState<string | null>(null)
 
   const injectionLines = useMemo(
-    () => treatment?.lines.filter((line) => line.kind === 'injection') ?? [],
+    () =>
+      treatment?.lines.filter(
+        (line) => line.kind === 'injection' && line.endedAt === null,
+      ) ?? [],
     [treatment],
   )
 
@@ -83,8 +86,8 @@ export default function InjectionModal() {
       const current = treatment.lines.find((line) => line.id === editing.lineId)
       return current ? [current] : []
     }
-    return treatment.lines.filter((line) => line.kind === 'injection')
-  }, [treatment, editing])
+    return injectionLines
+  }, [treatment, editing, injectionLines])
 
   const medicationById = useMemo(() => {
     const map = new Map<string, Medication>()

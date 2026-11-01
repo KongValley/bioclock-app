@@ -384,11 +384,12 @@ export interface SymptomTag {
 
 ---
 
-# 补充 v5：治疗组合与口服用药
+# 补充 v5 / v6：治疗组合、口服用药与疗效事件
 
-`SCHEMA_VERSION = 5`。本小节**取代 v3 及之前关于 `regimen / regimen_phase / injection` 的约定**：
+`SCHEMA_VERSION = 6`。v5 小节**取代 v3 及之前关于 `regimen / regimen_phase / injection` 的约定**：
 旧模型已从数据库删除，`src/types.ts` 顶部的 `Regimen`、`RegimenPhase`、`Injection` 等类型只作历史保留，
 不再有对应表和仓库 API；v3 的 `symptom_log.pain_score` 与 `symptom_tag` 继续有效。
+v6 只新增 `treatment_line.ended_at` 与 `efficacy_event`，已有数据全部保留。
 
 ## 设计变化
 
@@ -447,6 +448,7 @@ export interface SymptomTag {
 | `sync_with_host` | `INTEGER NOT NULL DEFAULT 0` | 注射线是否跟随主药针日 |
 | `anchor` | `TEXT NOT NULL DEFAULT 'actual'` | `actual / planned` |
 | `window_days` | `INTEGER NOT NULL DEFAULT 2` | 按时窗口 |
+| `ended_at` | `INTEGER` | 停用时间；`NULL` 表示仍在使用。停用后不再生成未来计划，历史保留 |
 | `oral_start` | `INTEGER` | 口服：首次服药时间（UTC 毫秒） |
 | `oral_duration_days` | `INTEGER` | 口服：疗程天数；`NULL` 表示长期 |
 | `oral_frequency` | `TEXT` | 口服：`daily / weekly / custom` |
@@ -496,6 +498,24 @@ export interface SymptomTag {
 
 约束：`status IN ('done', 'skipped', 'missed')`。
 索引：`idx_dose_log_line_time (line_id, scheduled_at)`。
+
+### `efficacy_event`（v6）
+
+记录用户主动登记的疗效下降 / 失效 / 不耐受等事件，不对原因或因果作任何推断。
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | `TEXT PK` | |
+| `line_id` | `TEXT NOT NULL` | → `treatment_line(id)`，`ON DELETE CASCADE` |
+| `kind` | `TEXT NOT NULL` | `reduced / failed / intolerance / antibody / other` |
+| `occurred_at` | `INTEGER NOT NULL` | 事件发生时间（UTC 毫秒） |
+| `doses_count` | `INTEGER NOT NULL DEFAULT 0` | 事件发生前该线已完成次数快照 |
+| `note` | `TEXT` | 用户备注 |
+| `created_at` | `INTEGER NOT NULL` | |
+
+索引：`idx_efficacy_event_line_time (line_id, occurred_at)`。
+创建事件时可以选择同时把 `treatment_line.ended_at` 设为事件时间；删除事件不会自动恢复用药线，
+需要用户显式「恢复用药线」。
 
 ### `reminder_rule`
 
@@ -547,6 +567,7 @@ export interface TreatmentLine {
   kind: LineKind; label: string
   isHost: boolean; syncWithHost: boolean
   anchor: RegimenAnchor; windowDays: number
+  endedAt: number | null   // 停用时间；null 表示仍在使用
   phases: TreatmentPhase[]  // 仅注射线
   oral: OralPlan | null     // 仅口服线
 }
@@ -570,6 +591,17 @@ export interface ReminderRuleV5 {
   offsets: number[]; timeOfDay: string
   snoozeMinutes: number; enabled: boolean
 }
+
+export type EfficacyKind = 'reduced' | 'failed' | 'intolerance' | 'antibody' | 'other'
+
+export interface EfficacyEvent {
+  id: string; lineId: string
+  kind: EfficacyKind
+  occurredAt: number
+  dosesCount: number      // 事件发生时已完成的用药次数快照
+  note: string | null
+  createdAt: number
+}
 ```
 
 ## 仓库 API（`src/db/repo.ts`）
@@ -584,6 +616,8 @@ export const treatments: {
   create(input: TreatmentInput): Promise<Treatment>
   /** 给已有方案补一条用药线；不自己开事务，便于导入复用 */
   addLine(treatmentId: string, input: TreatmentLineInput): Promise<TreatmentLine>
+  removeLine(lineId: string): Promise<void>
+  setLineEnded(lineId: string, endedAt: number | null): Promise<TreatmentLine>
   setActive(id: string, active: boolean): Promise<void>
   update(id: string, patch: TreatmentPatch): Promise<Treatment>
   remove(id: string): Promise<void>
@@ -595,6 +629,20 @@ export const doseLogs: {
   create(input: DoseLogInput): Promise<DoseLog>
   update(id: string, patch: Partial<Omit<DoseLog, 'id' | 'lineId' | 'createdAt'>>): Promise<DoseLog>
   remove(id: string): Promise<void>
+}
+
+export const efficacyEvents: {
+  list(lineId?: string): Promise<EfficacyEvent[]>
+  create(input: EfficacyEventInput): Promise<EfficacyEvent>
+  remove(id: string): Promise<void>
+}
+
+export interface EfficacyEventInput {
+  lineId: string
+  kind: EfficacyKind
+  occurredAt: number
+  note?: string | null
+  stopLine?: boolean      // true 时同时设置 treatment_line.ended_at
 }
 ```
 
@@ -643,13 +691,15 @@ export interface DoseLogInput {
 `create` 接收 `brandNames: string[]`、`extra: Record<string, unknown>`，内部转 JSON 文本。
 内置药物的名称、通用名、商品名、给药途径来自目录，`update` 只允许改默认剂量等用户字段。
 
-## 迁移：v5 直接重建
+## 迁移：v5 重建、v6 增量
 
 - `user_version = 0`：只执行 `CREATE_TABLES_SQL`。
-- `user_version = 1–4`：`DROP_ALL_TABLES_SQL` → `CREATE_TABLES_SQL` → `PRAGMA user_version = 5`。
-- **旧表 `regimen / regimen_phase / injection` 已删除**，v1–v4 的旧数据不会迁移，用户已确认开发阶段无需保留。
+- `user_version = 1–4`：`DROP_ALL_TABLES_SQL` → `CREATE_TABLES_SQL` → `PRAGMA user_version = 6`。
+  **旧表 `regimen / regimen_phase / injection` 已删除**，v1–v4 的旧数据不会迁移，用户已确认开发阶段无需保留。
+- `user_version = 5`：执行 `MIGRATION_6_SQL`（`ALTER TABLE treatment_line ADD COLUMN ended_at` +
+  `CREATE TABLE efficacy_event`）→ `PRAGMA user_version = 6`，治疗、打卡、症状与设置全部保留。
 - 重建后 `seedBuiltinMedications` 与 `seedBuiltinSymptomTags` 会重新播种；症状标签仍靠 `symptom_tags_seeded` 防止重复播种。
-- `DELETE_ALL_BUSINESS_DATA_SQL` 只清 v5 业务表；`DROP_ALL_TABLES_SQL` 同时包含新旧表名，用于清库和 v5 重建。
+- `DELETE_ALL_BUSINESS_DATA_SQL` 清理 v6 业务表（含 `efficacy_event`）；`DROP_ALL_TABLES_SQL` 同时包含新旧表名，用于清库和 v5 重建。
 
 ## 导入 v2
 

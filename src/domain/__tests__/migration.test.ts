@@ -8,12 +8,14 @@ import { afterAll, describe, expect, it } from 'vitest'
  * 建库 / 升级的集成测试。
  *
  * 用 Node 内置 sqlite 真跑一遍 SQL（不 mock），验证：
- * - 全新库建出 v5 结构；
- * - v4 老库打开后被重建为 v5（旧表消失、新表存在且列正确）；
+ * - 全新库建出 v6 结构；
+ * - v1–v4 老库打开后被重建为 v6（旧表消失、新表存在且列正确）；
+ * - v5 老库走增量迁移，治疗、打卡、症状与设置都保留；
  * - 清库 SQL 在旧库和新库上都能执行。
  *
  * index.ts 依赖 expo-sqlite，不能直接 import，所以这里复刻它用到的纯 SQL：
- * `buildMigrationSql` 的逻辑 = CREATE_TABLES_SQL（全新）或 DROP_ALL_TABLES_SQL + CREATE_TABLES_SQL。
+ * `buildMigrationSql` 的逻辑 = CREATE_TABLES_SQL（全新）、MIGRATION_6_SQL（v5）
+ * 或 DROP_ALL_TABLES_SQL + CREATE_TABLES_SQL（低于 v5）。
  */
 
 const require = createRequire(import.meta.url)
@@ -44,13 +46,17 @@ async function loadSchema(): Promise<{
   CREATE_TABLES_SQL: string
   DELETE_ALL_BUSINESS_DATA_SQL: string
   DROP_ALL_TABLES_SQL: string
+  MIGRATION_6_SQL: string
   SCHEMA_VERSION: number
+  buildV6RepairSql: (options: { hasEndedAt: boolean; hasEfficacyTable: boolean }) => string
 }> {
   return (await import('../../db/schema')) as {
     CREATE_TABLES_SQL: string
     DELETE_ALL_BUSINESS_DATA_SQL: string
     DROP_ALL_TABLES_SQL: string
+    MIGRATION_6_SQL: string
     SCHEMA_VERSION: number
+    buildV6RepairSql: (options: { hasEndedAt: boolean; hasEfficacyTable: boolean }) => string
   }
 }
 
@@ -186,13 +192,13 @@ CREATE INDEX idx_injection_regimen_time ON injection (regimen_id, injected_at);
 
 const OLD_TABLES = ['regimen', 'regimen_phase', 'injection']
 
-describe.skipIf(!DatabaseSync)('数据库建表与升级（v5）', () => {
-  it('SCHEMA_VERSION 是 5', async () => {
+describe.skipIf(!DatabaseSync)('数据库建表与升级（v6）', () => {
+  it('SCHEMA_VERSION 是 6', async () => {
     const schema = await loadSchema()
-    expect(schema.SCHEMA_VERSION).toBe(5)
+    expect(schema.SCHEMA_VERSION).toBe(6)
   })
 
-  it('全新库只执行 CREATE_TABLES_SQL，建出 v5 表结构', async () => {
+  it('全新库只执行 CREATE_TABLES_SQL，建出 v6 表结构', async () => {
     const schema = await loadSchema()
     const db = new DatabaseSync!(freshDbPath())
 
@@ -200,7 +206,7 @@ describe.skipIf(!DatabaseSync)('数据库建表与升级（v5）', () => {
     db.exec(schema.CREATE_TABLES_SQL)
     db.exec(`PRAGMA user_version = ${schema.SCHEMA_VERSION}`)
 
-    expect(userVersion(db)).toBe(5)
+    expect(userVersion(db)).toBe(6)
 
     const tables = tableNames(db)
     for (const table of [
@@ -208,6 +214,7 @@ describe.skipIf(!DatabaseSync)('数据库建表与升级（v5）', () => {
       'treatment',
       'treatment_line',
       'treatment_phase',
+      'efficacy_event',
       'dose_log',
       'reminder_rule',
       'symptom_log',
@@ -246,6 +253,7 @@ describe.skipIf(!DatabaseSync)('数据库建表与升级（v5）', () => {
         'sync_with_host',
         'anchor',
         'window_days',
+        'ended_at',
         'oral_start',
         'oral_duration_days',
         'oral_frequency',
@@ -265,6 +273,18 @@ describe.skipIf(!DatabaseSync)('数据库建表与升级（v5）', () => {
         'repeat_count',
         'dose',
         'unit',
+      ]),
+    )
+
+    expect(columnNames(db, 'efficacy_event')).toEqual(
+      expect.arrayContaining([
+        'id',
+        'line_id',
+        'kind',
+        'occurred_at',
+        'doses_count',
+        'note',
+        'created_at',
       ]),
     )
 
@@ -374,7 +394,7 @@ describe.skipIf(!DatabaseSync)('数据库建表与升级（v5）', () => {
     db.close()
   })
 
-  it('v4 老库打开后被重建为 v5：旧表消失、新表存在、user_version = 5', async () => {
+  it('v4 老库打开后被重建为 v6：旧表消失、新表存在、user_version = 6', async () => {
     const schema = await loadSchema()
     const db = new DatabaseSync!(freshDbPath())
 
@@ -406,7 +426,7 @@ describe.skipIf(!DatabaseSync)('数据库建表与升级（v5）', () => {
     db.exec(schema.CREATE_TABLES_SQL)
     db.exec(`PRAGMA user_version = ${schema.SCHEMA_VERSION}`)
 
-    expect(userVersion(db)).toBe(5)
+    expect(userVersion(db)).toBe(6)
 
     const tables = tableNames(db)
     for (const table of OLD_TABLES) {
@@ -417,6 +437,7 @@ describe.skipIf(!DatabaseSync)('数据库建表与升级（v5）', () => {
       'treatment',
       'treatment_line',
       'treatment_phase',
+      'efficacy_event',
       'dose_log',
       'reminder_rule',
       'symptom_log',
@@ -486,7 +507,125 @@ describe.skipIf(!DatabaseSync)('数据库建表与升级（v5）', () => {
     db.close()
   })
 
-  it('清库 SQL 在 v5 库上可执行，并清掉新模型的全部业务数据', async () => {
+  it('v5 库走增量迁移：治疗与打卡保留，并新增 ended_at / efficacy_event', async () => {
+    const schema = await loadSchema()
+    const db = new DatabaseSync!(freshDbPath())
+    db.exec('PRAGMA foreign_keys = ON')
+
+    // 用最新结构建库，再退回 v5 的样子（去掉 v6 新增的列与表）
+    db.exec(schema.CREATE_TABLES_SQL)
+    db.exec('DROP TABLE efficacy_event')
+    db.exec('ALTER TABLE treatment_line DROP COLUMN ended_at')
+    db.exec('PRAGMA user_version = 5')
+
+    db.prepare(
+      `INSERT INTO medication (id, name, unit, color, route, is_builtin, created_at)
+       VALUES (?, ?, ?, ?, ?, 1, ?)`,
+    ).run('m1', '阿达木单抗', 'mg', '#2B6CB0', 'sc', 1)
+    db.prepare(`INSERT INTO treatment (id, name, is_active, created_at) VALUES (?, ?, 1, ?)`).run(
+      't1',
+      '组合方案',
+      1,
+    )
+    db.prepare(
+      `INSERT INTO treatment_line
+        (id, treatment_id, medication_id, kind, label, is_host, sync_with_host, anchor)
+       VALUES (?, ?, ?, ?, ?, 1, 0, ?)`,
+    ).run('l1', 't1', 'm1', 'injection', '阿达木单抗', 'actual')
+    db.prepare(
+      `INSERT INTO treatment_phase
+        (id, line_id, order_idx, kind, interval_days, repeat_count, dose, unit)
+       VALUES (?, ?, 0, 'maintenance', 14, 0, 40, 'mg')`,
+    ).run('ph1', 'l1')
+    db.prepare(
+      `INSERT INTO dose_log (id, line_id, scheduled_at, taken_at, status, dose, unit, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'done', 40, 'mg', ?, ?)`,
+    ).run('d1', 'l1', 1000, 1000, 1000, 1000)
+    db.prepare(
+      `INSERT INTO symptom_log (id, logged_at, severity, tags, dose_log_id)
+       VALUES (?, ?, 2, '[]', ?)`,
+    ).run('s1', 2000, 'd1')
+    db.prepare(`INSERT INTO app_setting (key, value) VALUES (?, ?)`).run('patient_name', 'Alice')
+
+    expect(columnNames(db, 'treatment_line')).not.toContain('ended_at')
+
+    // 复刻 index.ts 的 migrate(fromVersion = 5)
+    db.exec(schema.MIGRATION_6_SQL)
+    db.exec(`PRAGMA user_version = ${schema.SCHEMA_VERSION}`)
+
+    expect(userVersion(db)).toBe(6)
+    expect(columnNames(db, 'treatment_line')).toContain('ended_at')
+    expect(tableNames(db)).toContain('efficacy_event')
+
+    // 原有数据一行不少
+    const treatment = db.prepare('SELECT name FROM treatment WHERE id = ?').get('t1') as {
+      name: string
+    }
+    expect(treatment.name).toBe('组合方案')
+    const line = db
+      .prepare('SELECT label, ended_at FROM treatment_line WHERE id = ?')
+      .get('l1') as { label: string; ended_at: number | null }
+    expect(line.label).toBe('阿达木单抗')
+    expect(line.ended_at).toBeNull()
+    const dose = db.prepare('SELECT status FROM dose_log WHERE id = ?').get('d1') as {
+      status: string
+    }
+    expect(dose.status).toBe('done')
+    const symptom = db.prepare('SELECT dose_log_id FROM symptom_log WHERE id = ?').get('s1') as {
+      dose_log_id: string | null
+    }
+    expect(symptom.dose_log_id).toBe('d1')
+    const setting = db.prepare('SELECT value FROM app_setting WHERE key = ?').get('patient_name') as {
+      value: string
+    }
+    expect(setting.value).toBe('Alice')
+
+    // 新表可用，且 kind 有取值约束
+    db.prepare(
+      `INSERT INTO efficacy_event (id, line_id, kind, occurred_at, doses_count, created_at)
+       VALUES (?, ?, 'reduced', ?, 1, ?)`,
+    ).run('e1', 'l1', 3000, 3000)
+    expect(() =>
+      db
+        .prepare(
+          `INSERT INTO efficacy_event (id, line_id, kind, occurred_at, created_at)
+           VALUES (?, ?, 'unknown', ?, ?)`,
+        )
+        .run('e2', 'l1', 3000, 3000),
+    ).toThrow()
+
+    // 删除用药线时疗效事件级联删除
+    db.prepare('DELETE FROM treatment_line WHERE id = ?').run('l1')
+    const events = db.prepare('SELECT COUNT(*) AS n FROM efficacy_event').get() as { n: number }
+    expect(events.n).toBe(0)
+
+    db.close()
+  })
+
+  it('user_version 已是 6 但缺列/缺表时，可以按实际结构补齐', async () => {
+    const schema = await loadSchema()
+    const db = new DatabaseSync!(freshDbPath())
+    db.exec(schema.CREATE_TABLES_SQL)
+    db.exec('DROP TABLE efficacy_event')
+    db.exec('ALTER TABLE treatment_line DROP COLUMN ended_at')
+    db.exec('PRAGMA user_version = 6')
+
+    expect(schema.buildV6RepairSql({ hasEndedAt: false, hasEfficacyTable: false })).toContain(
+      'ADD COLUMN ended_at',
+    )
+    expect(schema.buildV6RepairSql({ hasEndedAt: true, hasEfficacyTable: true })).toBe('')
+
+    db.exec(schema.buildV6RepairSql({ hasEndedAt: false, hasEfficacyTable: false }))
+
+    expect(userVersion(db)).toBe(6)
+    expect(columnNames(db, 'treatment_line')).toContain('ended_at')
+    expect(tableNames(db)).toContain('efficacy_event')
+    expect(indexNames(db, 'efficacy_event')).toContain('idx_efficacy_event_line_time')
+
+    db.close()
+  })
+
+  it('清库 SQL 在 v6 库上可执行，并清掉全部业务数据', async () => {
     const schema = await loadSchema()
     const db = new DatabaseSync!(freshDbPath())
     db.exec(schema.CREATE_TABLES_SQL)
@@ -507,10 +646,14 @@ describe.skipIf(!DatabaseSync)('数据库建表与升级（v5）', () => {
     db.prepare(
       `INSERT INTO dose_log (id, line_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
     ).run('d1', 'l1', 'done', 1, 1)
+    db.prepare(
+      `INSERT INTO efficacy_event (id, line_id, kind, occurred_at, doses_count, created_at)
+       VALUES (?, ?, 'failed', ?, 1, ?)`,
+    ).run('e1', 'l1', 2, 2)
 
     db.exec(schema.DELETE_ALL_BUSINESS_DATA_SQL)
 
-    for (const table of ['treatment', 'treatment_line', 'dose_log', 'reminder_rule']) {
+    for (const table of ['treatment', 'treatment_line', 'dose_log', 'efficacy_event', 'reminder_rule']) {
       const row = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }
       expect(row.n).toBe(0)
     }

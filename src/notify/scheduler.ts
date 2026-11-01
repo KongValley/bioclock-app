@@ -174,6 +174,7 @@ function buildInjectionDrafts(input: {
 
     const line = lines.get(plan.lineId)
     const medication = line ? medicationById.get(line.medicationId) ?? null : null
+    if (line?.endedAt) continue
     const medicationName = medication?.name ?? line?.label ?? treatmentName
     // 注射线只可能是皮下或静脉；口服线不走这里。
     const route: 'sc' | 'iv' = medication?.route === 'iv' ? 'iv' : 'sc'
@@ -255,6 +256,7 @@ function buildOralDrafts(input: {
 
     const line = lines.get(plan.lineId)
     if (!line || !line.oral) continue
+    if (line.endedAt) continue
 
     const day = startOfLocalDay(plan.plannedAt)
     const remindMinutes = parseTimeOfDay(line.oral.remindTime, DEFAULT_REMINDER_MINUTES)

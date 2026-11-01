@@ -549,6 +549,54 @@ describe('nextDose / nextDoseForLine', () => {
   })
 })
 
+describe('停用的用药线', () => {
+  it('注射线停用后不再生成未来计划，历史保留', () => {
+    const line = makeInjectionLine({
+      id: 'line-host',
+      endedAt: T0 + 30 * DAY,
+      phases: [makePhase({ orderIdx: 0, intervalDays: 14 })],
+    })
+    const plans = buildInjectionPlans({
+      line,
+      logs: [injectionLog(0), injectionLog(14), injectionLog(28)],
+      now: T0 + 35 * DAY,
+    })
+
+    expect(offsets(plans)).toEqual([0, 14, 28])
+    expect(plans.every((plan) => plan.status === 'done')).toBe(true)
+  })
+
+  it('口服线停用后不再生成停用日之后的打卡点', () => {
+    const line = makeOralLine({
+      startDate: T0,
+      frequency: 'daily',
+      endedAt: T0 + 2 * DAY,
+    })
+    const plans = buildOralPlans({ line, logs: [], now: T0 + 10 * DAY })
+
+    expect(offsets(plans)).toEqual([0, 1, 2])
+  })
+
+  it('同步线跟随主药时，任一条线停用都会截断计划', () => {
+    const host = makeInjectionLine({ id: 'line-host' })
+    const synced = makeInjectionLine({
+      id: 'line-synced',
+      isHost: false,
+      syncWithHost: true,
+      endedAt: T0 + 7 * DAY,
+    })
+
+    const plans = buildSchedule({
+      lines: [host, synced],
+      logs: [injectionLog(0)],
+      now: T0 + 20 * DAY,
+    })
+    const syncedPlans = plans.filter((plan) => plan.lineId === 'line-synced')
+
+    expect(offsets(syncedPlans)).toEqual([0])
+  })
+})
+
 describe('totalPlannedDoses', () => {
   it('有限方案累加 repeatCount，无限维持阶段返回 Infinity', () => {
     expect(

@@ -1,9 +1,11 @@
 import * as SQLite from 'expo-sqlite'
 import {
+  buildV6RepairSql,
   CREATE_TABLES_SQL,
   DATABASE_NAME,
   DELETE_ALL_BUSINESS_DATA_SQL,
   DROP_ALL_TABLES_SQL,
+  MIGRATION_6_SQL,
   SCHEMA_VERSION,
 } from './schema'
 import { seedBuiltinMedications, seedBuiltinSymptomTags } from './seed'
@@ -48,6 +50,11 @@ async function openAndMigrate(): Promise<SQLite.SQLiteDatabase> {
   if (effective < SCHEMA_VERSION) {
     await migrate(db, effective)
   }
+  // 防御性修复：开发期曾出现过 user_version 已写成 6、但 v6 列/表尚未建出的库。
+  // 这里按实际结构补齐，不会删除任何数据；已经完整时是空操作。
+  if (effective >= 5) {
+    await repairV6Schema(db)
+  }
 
   await seedBuiltinMedications(db)
   await seedBuiltinSymptomTags(db)
@@ -65,11 +72,14 @@ async function readUserVersion(db: SQLite.SQLiteDatabase): Promise<number> {
  * - 全新库（user_version = 0）：只建表，不做任何删除。
  * - v1–v4 老库：v5 换了整套方案模型（regimen → treatment），
  *   用户已确认开发阶段老数据不必保留，所以直接 DROP 全部旧表后按 CREATE_TABLES_SQL 重建。
- *   内置药与症状标签会在 openAndMigrate 里重新播种。
+ * - v5 库：走 MIGRATION_6_SQL 增量升级，保留全部数据。
  */
 export function buildMigrationSql(fromVersion: number): string {
   if (fromVersion === 0) {
     return `${CREATE_TABLES_SQL}\nPRAGMA user_version = ${SCHEMA_VERSION};`
+  }
+  if (fromVersion === 5) {
+    return `${MIGRATION_6_SQL}\nPRAGMA user_version = ${SCHEMA_VERSION};`
   }
   return `${DROP_ALL_TABLES_SQL}\n${CREATE_TABLES_SQL}\nPRAGMA user_version = ${SCHEMA_VERSION};`
 }
@@ -82,6 +92,32 @@ async function migrate(db: SQLite.SQLiteDatabase, fromVersion: number): Promise<
 
   await db.withTransactionAsync(async () => {
     await db.execAsync(buildMigrationSql(fromVersion))
+  })
+}
+
+/**
+ * 按实际表结构补齐 v6 的 `ended_at` 与 `efficacy_event`。
+ *
+ * 正常情况下 v5 → v6 已由 MIGRATION_6_SQL 完成；这里只处理版本号与结构不一致的库
+ * （例如升级中途被打断，或开发期提前写过 user_version）。幂等，不删除数据。
+ */
+async function repairV6Schema(db: SQLite.SQLiteDatabase): Promise<void> {
+  const columns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(treatment_line)')
+  if (columns.length === 0) return
+  const hasEndedAt = columns.some((column) => column.name === 'ended_at')
+  const efficacyTable = await db.getFirstAsync<{ name: string }>(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'efficacy_event' LIMIT 1`,
+  )
+  if (hasEndedAt && efficacyTable) return
+
+  const sql = buildV6RepairSql({
+    hasEndedAt,
+    hasEfficacyTable: efficacyTable !== null,
+  })
+  if (sql === '') return
+
+  await db.withTransactionAsync(async () => {
+    await db.execAsync(sql)
   })
 }
 

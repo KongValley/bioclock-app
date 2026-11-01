@@ -151,6 +151,9 @@ export type OralFrequency = 'daily' | 'weekly' | 'custom'
 /** 打卡状态：已用 / 跳过 / 漏用 */
 export type DoseStatus = 'done' | 'skipped' | 'missed'
 
+/** 疗效事件类型：下降 / 失效 / 不耐受 / 抗药抗体 / 其他 */
+export type EfficacyKind = 'reduced' | 'failed' | 'intolerance' | 'antibody' | 'other'
+
 export interface TreatmentPhase {
   id: string
   lineId: string
@@ -169,9 +172,9 @@ export interface OralPlan {
   /** 疗程天数；null 表示长期服用 */
   durationDays: number | null
   frequency: OralFrequency
-  /** 每个周期的次数：daily 忽略，weekly/custom 有意义 */
+  /** 仅 weekly 使用：每周 N 次，按周均匀分布 */
   timesPerPeriod: number
-  /** 自定义周期里服药的日子，0 = 周日 … 6 = 周六 */
+  /** 仅 custom 使用：固定周几，0 = 周日 … 6 = 周六 */
   daysOfWeek: number[]
   /** 提醒时间 'HH:mm' */
   remindTime: string
@@ -189,10 +192,26 @@ export interface TreatmentLine {
   syncWithHost: boolean
   anchor: RegimenAnchor
   windowDays: number
+  /** 停用时间；null 表示仍在使用。停用后不再生成未来计划，历史保留。 */
+  endedAt: number | null
   /** 仅注射线有意义，口服线为空数组 */
   phases: TreatmentPhase[]
   /** 仅口服线有意义，注射线为 null */
   oral: OralPlan | null
+}
+
+/**
+ * 疗效事件：记录某个用药线在某一时点疗效下降 / 失效等。
+ * `dosesCount` 是事件发生时该线已完成的用药次数快照。
+ */
+export interface EfficacyEvent {
+  id: string
+  lineId: string
+  kind: EfficacyKind
+  occurredAt: number
+  dosesCount: number
+  note: string | null
+  createdAt: number
 }
 
 export interface Treatment {
