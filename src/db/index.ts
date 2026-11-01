@@ -1,11 +1,13 @@
 import * as SQLite from 'expo-sqlite'
 import {
   buildV6RepairSql,
+  buildV7RepairSql,
   CREATE_TABLES_SQL,
   DATABASE_NAME,
   DELETE_ALL_BUSINESS_DATA_SQL,
   DROP_ALL_TABLES_SQL,
   MIGRATION_6_SQL,
+  MIGRATION_7_SQL,
   SCHEMA_VERSION,
 } from './schema'
 import { seedBuiltinMedications, seedBuiltinSymptomTags } from './seed'
@@ -55,6 +57,9 @@ async function openAndMigrate(): Promise<SQLite.SQLiteDatabase> {
   if (effective >= 5) {
     await repairV6Schema(db)
   }
+  if (effective >= 6) {
+    await repairV7Schema(db)
+  }
 
   await seedBuiltinMedications(db)
   try {
@@ -76,14 +81,18 @@ async function readUserVersion(db: SQLite.SQLiteDatabase): Promise<number> {
  * - 全新库（user_version = 0）：只建表，不做任何删除。
  * - v1–v4 老库：v5 换了整套方案模型（regimen → treatment），
  *   用户已确认开发阶段老数据不必保留，所以直接 DROP 全部旧表后按 CREATE_TABLES_SQL 重建。
- * - v5 库：走 MIGRATION_6_SQL 增量升级，保留全部数据。
+ * - v5 库：先 MIGRATION_6_SQL，再 MIGRATION_7_SQL。
+ * - v6 库：只执行 MIGRATION_7_SQL。
  */
 export function buildMigrationSql(fromVersion: number): string {
   if (fromVersion === 0) {
     return `${CREATE_TABLES_SQL}\nPRAGMA user_version = ${SCHEMA_VERSION};`
   }
   if (fromVersion === 5) {
-    return `${MIGRATION_6_SQL}\nPRAGMA user_version = ${SCHEMA_VERSION};`
+    return `${MIGRATION_6_SQL}\n${MIGRATION_7_SQL}\nPRAGMA user_version = ${SCHEMA_VERSION};`
+  }
+  if (fromVersion === 6) {
+    return `${MIGRATION_7_SQL}\nPRAGMA user_version = ${SCHEMA_VERSION};`
   }
   return `${DROP_ALL_TABLES_SQL}\n${CREATE_TABLES_SQL}\nPRAGMA user_version = ${SCHEMA_VERSION};`
 }
@@ -120,6 +129,18 @@ async function repairV6Schema(db: SQLite.SQLiteDatabase): Promise<void> {
   })
   if (sql === '') return
 
+  await db.withTransactionAsync(async () => {
+    await db.execAsync(sql)
+  })
+}
+
+/** 按实际结构补齐 v7 的 treatment_phase.effective_from。 */
+async function repairV7Schema(db: SQLite.SQLiteDatabase): Promise<void> {
+  const columns = await db.getAllAsync<{ name: string }>('PRAGMA table_info(treatment_phase)')
+  if (columns.length === 0) return
+  const hasEffectiveFrom = columns.some((column) => column.name === 'effective_from')
+  const sql = buildV7RepairSql({ hasEffectiveFrom })
+  if (sql === '') return
   await db.withTransactionAsync(async () => {
     await db.execAsync(sql)
   })

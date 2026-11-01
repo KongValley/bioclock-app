@@ -661,6 +661,51 @@ describe('停用的用药线', () => {
   })
 })
 
+describe('阶段生效时间（调整间隔）', () => {
+  it('从生效时间开始用新间隔，旧阶段继续保留', () => {
+    const line = makeInjectionLine({
+      phases: [
+        makePhase({ orderIdx: 0, intervalDays: 56, repeatCount: 0 }),
+        makePhase({
+          orderIdx: 1,
+          intervalDays: 42,
+          repeatCount: 0,
+          effectiveFrom: T0 + 42 * DAY,
+        }),
+      ],
+    })
+    const plans = buildInjectionPlans({
+      line,
+      logs: [injectionLog(0)],
+      now: T0 + 100 * DAY,
+    })
+
+    expect(offsets(plans).slice(0, 3)).toEqual([0, 42, 84])
+    expect(plans[0].dose).toBe(40)
+  })
+
+  it('生效时间之前补录的旧记录仍按旧阶段处理', () => {
+    const line = makeInjectionLine({
+      phases: [
+        makePhase({ orderIdx: 0, intervalDays: 56, repeatCount: 0 }),
+        makePhase({
+          orderIdx: 1,
+          intervalDays: 42,
+          repeatCount: 0,
+          effectiveFrom: T0 + 100 * DAY,
+        }),
+      ],
+    })
+    const plans = buildInjectionPlans({
+      line,
+      logs: [injectionLog(0), injectionLog(56)],
+      now: T0 + 80 * DAY,
+    })
+
+    expect(offsets(plans).slice(0, 2)).toEqual([0, 56])
+  })
+})
+
 describe('totalPlannedDoses', () => {
   it('有限方案累加 repeatCount，无限维持阶段返回 Infinity', () => {
     expect(

@@ -25,6 +25,7 @@ export function makePhase(input: {
   repeatCount?: number
   dose?: number | null
   unit?: string
+  effectiveFrom?: number | null
 }): TreatmentPhase {
   const {
     lineId = 'line-host',
@@ -34,6 +35,7 @@ export function makePhase(input: {
     repeatCount = 0,
     dose = 40,
     unit = 'mg',
+    effectiveFrom = null,
   } = input
 
   return {
@@ -45,6 +47,7 @@ export function makePhase(input: {
     repeatCount,
     dose,
     unit,
+    effectiveFrom,
   }
 }
 

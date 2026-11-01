@@ -85,6 +85,7 @@ interface TreatmentPhaseRow {
   repeat_count: number
   dose: number | null
   unit: string
+  effective_from: number | null
 }
 
 interface DoseLogRow {
@@ -196,6 +197,7 @@ function mapTreatmentPhase(row: TreatmentPhaseRow): TreatmentPhase {
     repeatCount: row.repeat_count,
     dose: row.dose,
     unit: row.unit,
+    effectiveFrom: row.effective_from ?? null,
   }
 }
 
@@ -842,6 +844,10 @@ function normalizePhases(
     const repeatCount = requireInteger(phase.repeatCount, '重复次数', 0)
     const dose = requireNullableDose(phase.dose, '阶段剂量')
     const unit = requireNonEmptyString(phase.unit, '阶段单位')
+    const effectiveFrom =
+      phase.effectiveFrom === null || phase.effectiveFrom === undefined
+        ? null
+        : requireTimestamp(phase.effectiveFrom, '阶段生效时间')
     return {
       id: Crypto.randomUUID(),
       line_id: lineId,
@@ -851,6 +857,7 @@ function normalizePhases(
       repeat_count: repeatCount,
       dose,
       unit,
+      effective_from: effectiveFrom,
     }
   })
 
@@ -943,8 +950,8 @@ async function insertLine(db: SQLiteDatabase, line: NormalizedLine): Promise<voi
   for (const phase of line.phases) {
     await db.runAsync(
       `INSERT INTO treatment_phase
-        (id, line_id, order_idx, kind, interval_days, repeat_count, dose, unit)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, line_id, order_idx, kind, interval_days, repeat_count, dose, unit, effective_from)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       phase.id,
       phase.line_id,
       phase.order_idx,
@@ -953,6 +960,7 @@ async function insertLine(db: SQLiteDatabase, line: NormalizedLine): Promise<voi
       phase.repeat_count,
       phase.dose,
       phase.unit,
+      phase.effective_from,
     )
   }
 }
@@ -1346,8 +1354,8 @@ export const treatments = {
           for (const phase of entry.phases) {
             await db.runAsync(
               `INSERT INTO treatment_phase
-                (id, line_id, order_idx, kind, interval_days, repeat_count, dose, unit)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                (id, line_id, order_idx, kind, interval_days, repeat_count, dose, unit, effective_from)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               phase.id,
               phase.line_id,
               phase.order_idx,
@@ -1356,6 +1364,7 @@ export const treatments = {
               phase.repeat_count,
               phase.dose,
               phase.unit,
+              phase.effective_from,
             )
           }
         }

@@ -146,16 +146,71 @@ export function resolveHostLine(
 }
 
 /**
- * 第 index 针落在哪个阶段。
- * 每阶段顺序消耗 repeatCount 次；repeatCount === 0 表示该阶段无限重复。
- * 阶段全部消耗完（有限方案）后返回 null。
+ * 按次数推进阶段（旧逻辑），忽略带生效时间的阶段。
+ * repeatCount === 0 表示该阶段无限重复；消耗完返回 null。
  */
-function phaseAt(phases: TreatmentPhase[], index: number): TreatmentPhase | null {
+function phaseAtByCount(phases: TreatmentPhase[], index: number): TreatmentPhase | null {
   let remaining = index
   for (const phase of phases) {
     if (phase.repeatCount === 0) return phase
     if (remaining < phase.repeatCount) return phase
     remaining -= phase.repeatCount
+  }
+  return null
+}
+
+/** 找到上一个计划时间之后最早生效的阶段。 */
+function nextEffectivePhase(
+  phases: TreatmentPhase[],
+  after: number,
+): TreatmentPhase | null {
+  return (
+    phases
+      .filter(
+        (phase) =>
+          phase.effectiveFrom !== null && phase.effectiveFrom > after,
+      )
+      .sort(
+        (a, b) =>
+          (a.effectiveFrom ?? 0) - (b.effectiveFrom ?? 0) ||
+          a.orderIdx - b.orderIdx,
+      )[0] ?? null
+  )
+}
+
+/**
+ * 第 index 针落在哪个阶段。
+ *
+ * - 有 effectiveFrom 的阶段按日期生效，优先于次数推进；
+ * - 日期相同时取 orderIdx 更大的；
+ * - 如果 index 已被旧阶段用尽、但日期还没到新阶段，回退到最后一个无生效时间的阶段，
+ *   这样之后补录更早的历史记录也能按旧间隔显示。
+ */
+function phaseAt(
+  phases: TreatmentPhase[],
+  index: number,
+  plannedAt?: number,
+): TreatmentPhase | null {
+  if (plannedAt !== undefined) {
+    const dated = phases
+      .filter(
+        (phase) =>
+          phase.effectiveFrom !== null && phase.effectiveFrom <= plannedAt,
+      )
+      .sort(
+        (a, b) =>
+          (a.effectiveFrom ?? 0) - (b.effectiveFrom ?? 0) ||
+          a.orderIdx - b.orderIdx,
+      )
+    if (dated.length > 0) return dated[dated.length - 1]
+  }
+
+  const undated = phases.filter((phase) => phase.effectiveFrom === null)
+  const byCount = phaseAtByCount(undated, index)
+  if (byCount) return byCount
+
+  if (phases.some((phase) => phase.effectiveFrom !== null)) {
+    return undated[undated.length - 1] ?? phases[0] ?? null
   }
   return null
 }
@@ -253,8 +308,8 @@ function pairLogs<T extends { plannedAt: number }>(
   return assigned
 }
 
-/** 取距离计划时间最近的未使用记录（注射线用）；超出容差的记录不认领。 */
-function takeNearestLog(
+/** 找到距离计划时间最近、且未被使用的记录；不标记为已使用。 */
+function findNearestLog(
   sortedLogs: SortedLog[],
   used: Set<string>,
   plannedAt: number,
@@ -275,9 +330,20 @@ function takeNearestLog(
       bestDistance = distance
     }
   }
-  if (!best) return null
-  used.add(best.log.id)
-  return best.log
+  return best?.log ?? null
+}
+
+/** 取距离计划时间最近的未使用记录（注射线用）；超出容差的记录不认领。 */
+function takeNearestLog(
+  sortedLogs: SortedLog[],
+  used: Set<string>,
+  plannedAt: number,
+  toleranceDays: number,
+  minAt?: number,
+): DoseLog | null {
+  const best = findNearestLog(sortedLogs, used, plannedAt, toleranceDays, minAt)
+  if (best) used.add(best.id)
+  return best
 }
 
 function statusForLogged(
@@ -352,10 +418,8 @@ export function buildInjectionPlans(input: {
   let futureCount = 0
 
   for (let index = 0; ; index += 1) {
-    const phase = phaseAt(phases, index)
-    if (phase === null) break
-
     let plannedAt: number
+    let previousPhase: TreatmentPhase | null = null
     if (index === 0) {
       const first = sortedLogs[0]
       plannedAt = first
@@ -366,8 +430,32 @@ export function buildInjectionPlans(input: {
       const previousActual = actualTimes[index - 1]
       const base =
         anchor === 'actual' && previousActual !== null ? previousActual : previousPlanned
-      plannedAt = base + phase.intervalDays * DAY
+      previousPhase = phaseAt(
+        phases,
+        index - 1,
+        plans[index - 1].plannedAt,
+      )
+      plannedAt = base + (previousPhase?.intervalDays ?? 0) * DAY
+      const nextPhase = nextEffectivePhase(phases, previousPlanned)
+      if (nextPhase?.effectiveFrom !== null && nextPhase?.effectiveFrom !== undefined) {
+        const oldTolerance = Math.max(
+          2,
+          windowDays + 1,
+          Math.ceil((previousPhase?.intervalDays ?? 28) / 2),
+        )
+        const oldLog = findNearestLog(sortedLogs, usedLogIds, plannedAt, oldTolerance)
+        const oldLogAt = oldLog
+          ? oldLog.takenAt ?? oldLog.scheduledAt ?? oldLog.createdAt
+          : null
+        // 补录的旧记录如果落在生效时间之前，仍然保留旧计划日；否则从生效时间开始用新阶段。
+        if (oldLogAt === null || oldLogAt >= nextPhase.effectiveFrom) {
+          plannedAt = nextPhase.effectiveFrom
+        }
+      }
     }
+
+    const phase = phaseAt(phases, index, plannedAt)
+    if (phase === null) break
 
     // 停用后不再生成普通未来计划；但停用日之后如果确实补录了打卡，仍要把它显示出来。
     const toleranceDays = Math.max(2, windowDays + 1, Math.ceil(phase.intervalDays / 2))
@@ -464,7 +552,7 @@ function buildSyncedPlans(input: {
   }
 
   const plans: SchedulePlan[] = timestamps.map((plannedAt, index) => {
-    const phase = phaseAt(ownPhases, index) ?? fallbackPhase
+    const phase = phaseAt(ownPhases, index, plannedAt) ?? fallbackPhase
     return {
       index,
       lineId: line.id,

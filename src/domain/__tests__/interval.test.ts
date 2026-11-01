@@ -2,19 +2,26 @@ import { describe, expect, it } from 'vitest'
 import { buildIntervalChangePhases } from '../interval'
 import { makePhase } from './fixtures'
 
+const DAY = 86_400_000
+const T0 = Date.UTC(2026, 0, 5)
+
 describe('从下一针起调整注射间隔', () => {
-  it('保留旧间隔的历史，下一针起使用新间隔', () => {
-    const phases = [makePhase({ orderIdx: 0, kind: 'maintenance', intervalDays: 56, repeatCount: 0 })]
-    const next = buildIntervalChangePhases(phases, 10, 42)
+  it('保留旧阶段，在生效时间追加新维持阶段', () => {
+    const phases = [
+      makePhase({ orderIdx: 0, kind: 'maintenance', intervalDays: 56, repeatCount: 0 }),
+    ]
+    const effectiveFrom = T0 + 42 * DAY
+    const next = buildIntervalChangePhases(phases, 42, effectiveFrom)
 
     expect(next).toEqual([
       {
         orderIdx: 0,
         kind: 'maintenance',
         intervalDays: 56,
-        repeatCount: 10,
+        repeatCount: 0,
         dose: 40,
         unit: 'mg',
+        effectiveFrom: null,
       },
       {
         orderIdx: 1,
@@ -23,40 +30,50 @@ describe('从下一针起调整注射间隔', () => {
         repeatCount: 0,
         dose: 40,
         unit: 'mg',
+        effectiveFrom,
       },
     ])
   })
 
-  it('保留负荷阶段，只截断当前维持阶段', () => {
+  it('保留负荷阶段', () => {
     const phases = [
       makePhase({ orderIdx: 0, kind: 'loading', intervalDays: 14, repeatCount: 2 }),
       makePhase({ orderIdx: 1, kind: 'maintenance', intervalDays: 56, repeatCount: 0 }),
     ]
-    const next = buildIntervalChangePhases(phases, 5, 42)
+    const effectiveFrom = T0 + 60 * DAY
+    const next = buildIntervalChangePhases(phases, 42, effectiveFrom)
 
-    expect(next.map((phase) => [phase.kind, phase.intervalDays, phase.repeatCount])).toEqual([
-      ['loading', 14, 2],
-      ['maintenance', 56, 3],
-      ['maintenance', 42, 0],
+    expect(next.map((phase) => [phase.kind, phase.intervalDays, phase.effectiveFrom])).toEqual([
+      ['loading', 14, null],
+      ['maintenance', 56, null],
+      ['maintenance', 42, effectiveFrom],
     ])
   })
 
-  it('还没有历史时直接替换间隔，不生成空的旧阶段', () => {
-    const phases = [makePhase({ orderIdx: 0, kind: 'maintenance', intervalDays: 56, repeatCount: 0 })]
-    const next = buildIntervalChangePhases(phases, 0, 42)
+  it('重复在同一个时间点调整会替换旧的新阶段', () => {
+    const effectiveFrom = T0 + 42 * DAY
+    const first = buildIntervalChangePhases(
+      [makePhase({ orderIdx: 0, kind: 'maintenance', intervalDays: 56, repeatCount: 0 })],
+      42,
+      effectiveFrom,
+    )
+    const second = buildIntervalChangePhases(
+      first.map((phase) => ({ ...phase, id: 'x', lineId: 'l' })),
+      35,
+      effectiveFrom,
+    )
 
-    expect(next).toHaveLength(1)
-    expect(next[0].intervalDays).toBe(42)
-    expect(next[0].repeatCount).toBe(0)
+    expect(second.filter((phase) => phase.effectiveFrom === effectiveFrom)).toHaveLength(1)
+    expect(second[second.length - 1].intervalDays).toBe(35)
   })
 
   it('负荷阶段不允许调整', () => {
     const phases = [makePhase({ orderIdx: 0, kind: 'loading', intervalDays: 14, repeatCount: 2 })]
-    expect(() => buildIntervalChangePhases(phases, 1, 42)).toThrow(/负荷阶段/)
+    expect(() => buildIntervalChangePhases(phases, 42, T0)).toThrow(/负荷阶段/)
   })
 
   it('非法间隔抛中文错误', () => {
     const phases = [makePhase({ orderIdx: 0, kind: 'maintenance', intervalDays: 56, repeatCount: 0 })]
-    expect(() => buildIntervalChangePhases(phases, 3, 0)).toThrow(/1 到 365/)
+    expect(() => buildIntervalChangePhases(phases, 0, T0)).toThrow(/1 到 365/)
   })
 })

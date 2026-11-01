@@ -126,6 +126,7 @@ describe('computeAdherence（注射线）', () => {
           repeatCount: 0,
           dose: 40,
           unit: 'mg',
+          effectiveFrom: null,
         },
       ],
     })
@@ -143,6 +144,7 @@ describe('computeAdherence（注射线）', () => {
           repeatCount: 0,
           dose: 25,
           unit: 'mg',
+          effectiveFrom: null,
         },
       ],
     })

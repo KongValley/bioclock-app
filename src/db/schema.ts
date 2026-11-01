@@ -12,9 +12,11 @@ export const DATABASE_NAME = 'bioclock.db'
  * v5 是「治疗方案」模型的重建版本：弃用旧的 regimen / regimen_phase / injection，
  * 改为 treatment / treatment_line / treatment_phase / dose_log。
  * v6 加入疗效事件（efficacy_event）和用药线停用时间（treatment_line.ended_at）。
+ * v7 给阶段加入生效时间（treatment_phase.effective_from），支持「从下一针起」调整间隔，
+ * 并在之后补录旧记录时仍按旧间隔计算。
  * v6 之后的结构变更必须走增量迁移，不再删用户数据。
  */
-export const SCHEMA_VERSION = 6
+export const SCHEMA_VERSION = 7
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS medication (
@@ -70,7 +72,8 @@ CREATE TABLE IF NOT EXISTS treatment_phase (
   interval_days INTEGER NOT NULL,
   repeat_count  INTEGER NOT NULL DEFAULT 0,
   dose          REAL,
-  unit          TEXT    NOT NULL
+  unit          TEXT    NOT NULL,
+  effective_from INTEGER
 );
 
 -- 疗效事件：记录某条用药线疗效下降 / 失效 / 不耐受等
@@ -184,6 +187,21 @@ ALTER TABLE treatment_line ADD COLUMN ended_at INTEGER;
 
 ${CREATE_EFFICACY_EVENT_SQL}
 `
+
+/** v6 → v7：阶段增加生效时间，用于「从下一针起」调整间隔。 */
+export const MIGRATION_7_SQL = `
+ALTER TABLE treatment_phase ADD COLUMN effective_from INTEGER;
+`
+
+/**
+ * 版本号已是 v7、但实际缺列/缺表时的修复 SQL。
+ * 返回空字符串表示结构完整，不需要执行。
+ */
+export function buildV7RepairSql(options: { hasEffectiveFrom: boolean }): string {
+  if (options.hasEffectiveFrom) return ''
+  return `ALTER TABLE treatment_phase ADD COLUMN effective_from INTEGER;
+PRAGMA user_version = ${SCHEMA_VERSION};`
+}
 
 /**
  * 版本号已是 v6、但实际缺列/缺表时的修复 SQL。

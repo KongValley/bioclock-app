@@ -204,7 +204,7 @@ export default function InjectionModal() {
     }
   }
 
-  const save = async () => {
+  const save = async (continueAfter = false) => {
     setFormError(null)
     if (!treatment) {
       setFormError('还没有治疗方案，请先在设置中完成配置。')
@@ -255,8 +255,14 @@ export default function InjectionModal() {
             note: payload.note,
           })
         : await addDoseLog(payload)
-      close()
-      toast(editing ? '注射记录已更新' : '已记录，下次提醒已更新', 'success')
+      if (continueAfter) {
+        setNote('')
+        setLotNumber('')
+        toast('已保存，继续补录下一条', 'success')
+      } else {
+        close()
+        toast(editing ? '注射记录已更新' : '已记录，下次提醒已更新', 'success')
+      }
       if (result.notifyWarning) toast(result.notifyWarning, 'error')
     } catch (error) {
       setFormError(errorMessage(error))
@@ -478,20 +484,32 @@ export default function InjectionModal() {
               style={{
                 paddingHorizontal: theme.spacing.lg,
                 paddingTop: theme.spacing.sm,
-                flexDirection: 'row',
-                gap: theme.spacing.md,
+                gap: theme.spacing.sm,
               }}
             >
-              <Button label={zh.common.cancel} onPress={close} variant="secondary" style={{ flex: 1 }} />
-              <Button
-                label={editing ? zh.common.save : '保存记录'}
-                onPress={() => {
-                  void save()
-                }}
-                loading={saving}
-                disabled={!ready || (!treatment && !editing)}
-                style={{ flex: 2 }}
-              />
+              {!editing ? (
+                <Button
+                  label="保存并继续补录"
+                  onPress={() => {
+                    void save(true)
+                  }}
+                  loading={saving}
+                  disabled={!ready || !treatment}
+                  variant="secondary"
+                />
+              ) : null}
+              <View style={{ flexDirection: 'row', gap: theme.spacing.md }}>
+                <Button label={zh.common.cancel} onPress={close} variant="secondary" style={{ flex: 1 }} />
+                <Button
+                  label={editing ? zh.common.save : '保存记录'}
+                  onPress={() => {
+                    void save(false)
+                  }}
+                  loading={saving}
+                  disabled={!ready || (!treatment && !editing)}
+                  style={{ flex: 2 }}
+                />
+              </View>
             </View>
           </View>
         </KeyboardAvoidingView>

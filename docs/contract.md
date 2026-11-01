@@ -384,12 +384,12 @@ export interface SymptomTag {
 
 ---
 
-# 补充 v5 / v6：治疗组合、口服用药与疗效事件
+# 补充 v5 / v6 / v7：治疗组合、口服用药、疗效事件与间隔调整
 
-`SCHEMA_VERSION = 6`。v5 小节**取代 v3 及之前关于 `regimen / regimen_phase / injection` 的约定**：
+`SCHEMA_VERSION = 7`。v5 小节**取代 v3 及之前关于 `regimen / regimen_phase / injection` 的约定**：
 旧模型已从数据库删除，`src/types.ts` 顶部的 `Regimen`、`RegimenPhase`、`Injection` 等类型只作历史保留，
 不再有对应表和仓库 API；v3 的 `symptom_log.pain_score` 与 `symptom_tag` 继续有效。
-v6 只新增 `treatment_line.ended_at` 与 `efficacy_event`，已有数据全部保留。
+v6 新增 `treatment_line.ended_at` 与 `efficacy_event`；v7 新增 `treatment_phase.effective_from`，已有数据全部保留。
 
 ## 设计变化
 
@@ -474,8 +474,16 @@ v6 只新增 `treatment_line.ended_at` 与 `efficacy_event`，已有数据全部
 | `repeat_count` | `INTEGER NOT NULL DEFAULT 0` | 重复次数；`0` 表示无限重复 |
 | `dose` | `REAL` | 阶段剂量 |
 | `unit` | `TEXT NOT NULL` | 单位 |
+| `effective_from` | `INTEGER` | v7：该阶段从何时生效；`NULL` 表示按 `order_idx` 次数推进 |
 
 索引：`idx_treatment_phase_order (line_id, order_idx)`。
+
+阶段选择规则：
+
+- 有 `effective_from` 的阶段按日期生效，取生效时间不晚于计划时间的最后一个阶段；
+- 没有生效时间的阶段仍按 `repeat_count` 顺序推进，兼容负荷期与旧数据；
+- 调整注射间隔时追加一个带 `effective_from` 的维持阶段，不截断旧阶段，
+  因此之后补录生效时间之前的历史记录，仍按旧间隔计算。
 
 ### `dose_log`
 
@@ -549,6 +557,7 @@ export interface TreatmentPhase {
   id: string; lineId: string; orderIdx: number
   kind: PhaseKind; intervalDays: number; repeatCount: number
   dose: number | null; unit: string
+  effectiveFrom: number | null  // v7：从该时间起生效
 }
 
 export interface OralPlan {
@@ -691,20 +700,21 @@ export interface DoseLogInput {
 `create` 接收 `brandNames: string[]`、`extra: Record<string, unknown>`，内部转 JSON 文本。
 内置药物的名称、通用名、商品名、给药途径来自目录，`update` 只允许改默认剂量等用户字段。
 
-## 迁移：v5 重建、v6 增量
+## 迁移：v5 重建、v6/v7 增量
 
 - `user_version = 0`：只执行 `CREATE_TABLES_SQL`。
-- `user_version = 1–4`：`DROP_ALL_TABLES_SQL` → `CREATE_TABLES_SQL` → `PRAGMA user_version = 6`。
+- `user_version = 1–4`：`DROP_ALL_TABLES_SQL` → `CREATE_TABLES_SQL` → `PRAGMA user_version = 7`。
   **旧表 `regimen / regimen_phase / injection` 已删除**，v1–v4 的旧数据不会迁移，用户已确认开发阶段无需保留。
-- `user_version = 5`：执行 `MIGRATION_6_SQL`（`ALTER TABLE treatment_line ADD COLUMN ended_at` +
-  `CREATE TABLE efficacy_event`）→ `PRAGMA user_version = 6`，治疗、打卡、症状与设置全部保留。
+- `user_version = 5`：执行 `MIGRATION_6_SQL`（`ended_at` + `efficacy_event`）和 `MIGRATION_7_SQL`（`effective_from`）→ `user_version = 7`。
+- `user_version = 6`：只执行 `MIGRATION_7_SQL`（`ALTER TABLE treatment_phase ADD COLUMN effective_from`）。
 - 重建后 `seedBuiltinMedications` 与 `seedBuiltinSymptomTags` 会重新播种；症状标签仍靠 `symptom_tags_seeded` 防止重复播种。
-- `DELETE_ALL_BUSINESS_DATA_SQL` 清理 v6 业务表（含 `efficacy_event`）；`DROP_ALL_TABLES_SQL` 同时包含新旧表名，用于清库和 v5 重建。
+- `DELETE_ALL_BUSINESS_DATA_SQL` 清理 v7 业务表（含 `efficacy_event`）；`DROP_ALL_TABLES_SQL` 同时包含新旧表名，用于清库和 v5 重建。
 
-## 导入 v2
+## 导入 v3
 
-- 顶层：`{ format: "bioclock-import", version: 2, medications, injections, oralLogs, symptoms }`；v1 仍接受。
+- 顶层：`{ format: "bioclock-import", version: 3, medications, injections, oralLogs, symptoms, lineStates, efficacyEvents }`；v1/v2 仍接受。
 - 注射/口服记录按「`lineLabel` → `medication` → 主药/第一条线」解析用药线。
+- `lineStates` 恢复用药线停用时间，`efficacyEvents` 恢复疗效事件；两者按线名/药名匹配当前激活方案。
 - 药已存在但当前方案没有对应线时自动建线：注射线用该药导入记录的中位间隔（默认 28 天），
   口服线默认每天一次、09:00、长期；首条注射线自动成为主药。
 - 药物按药名 / 通用名 / 商品名 / 内置目录名称互认；命中已有药只补空字段、合并商品名。

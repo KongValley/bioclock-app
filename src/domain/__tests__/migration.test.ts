@@ -8,14 +8,15 @@ import { afterAll, describe, expect, it } from 'vitest'
  * 建库 / 升级的集成测试。
  *
  * 用 Node 内置 sqlite 真跑一遍 SQL（不 mock），验证：
- * - 全新库建出 v6 结构；
- * - v1–v4 老库打开后被重建为 v6（旧表消失、新表存在且列正确）；
+ * - 全新库建出 v7 结构；
+ * - v1–v4 老库打开后被重建为 v7（旧表消失、新表存在且列正确）；
  * - v5 老库走增量迁移，治疗、打卡、症状与设置都保留；
+ * - v6 老库补 effective_from；
  * - 清库 SQL 在旧库和新库上都能执行。
  *
  * index.ts 依赖 expo-sqlite，不能直接 import，所以这里复刻它用到的纯 SQL：
- * `buildMigrationSql` 的逻辑 = CREATE_TABLES_SQL（全新）、MIGRATION_6_SQL（v5）
- * 或 DROP_ALL_TABLES_SQL + CREATE_TABLES_SQL（低于 v5）。
+ * `buildMigrationSql` 的逻辑 = CREATE_TABLES_SQL（全新）、MIGRATION_6_SQL + MIGRATION_7_SQL（v5）、
+ * MIGRATION_7_SQL（v6）或 DROP_ALL_TABLES_SQL + CREATE_TABLES_SQL（低于 v5）。
  */
 
 const require = createRequire(import.meta.url)
@@ -47,16 +48,20 @@ async function loadSchema(): Promise<{
   DELETE_ALL_BUSINESS_DATA_SQL: string
   DROP_ALL_TABLES_SQL: string
   MIGRATION_6_SQL: string
+  MIGRATION_7_SQL: string
   SCHEMA_VERSION: number
   buildV6RepairSql: (options: { hasEndedAt: boolean; hasEfficacyTable: boolean }) => string
+  buildV7RepairSql: (options: { hasEffectiveFrom: boolean }) => string
 }> {
   return (await import('../../db/schema')) as {
     CREATE_TABLES_SQL: string
     DELETE_ALL_BUSINESS_DATA_SQL: string
     DROP_ALL_TABLES_SQL: string
     MIGRATION_6_SQL: string
+    MIGRATION_7_SQL: string
     SCHEMA_VERSION: number
     buildV6RepairSql: (options: { hasEndedAt: boolean; hasEfficacyTable: boolean }) => string
+    buildV7RepairSql: (options: { hasEffectiveFrom: boolean }) => string
   }
 }
 
@@ -192,13 +197,13 @@ CREATE INDEX idx_injection_regimen_time ON injection (regimen_id, injected_at);
 
 const OLD_TABLES = ['regimen', 'regimen_phase', 'injection']
 
-describe.skipIf(!DatabaseSync)('数据库建表与升级（v6）', () => {
-  it('SCHEMA_VERSION 是 6', async () => {
+describe.skipIf(!DatabaseSync)('数据库建表与升级（v7）', () => {
+  it('SCHEMA_VERSION 是 7', async () => {
     const schema = await loadSchema()
-    expect(schema.SCHEMA_VERSION).toBe(6)
+    expect(schema.SCHEMA_VERSION).toBe(7)
   })
 
-  it('全新库只执行 CREATE_TABLES_SQL，建出 v6 表结构', async () => {
+  it('全新库只执行 CREATE_TABLES_SQL，建出 v7 表结构', async () => {
     const schema = await loadSchema()
     const db = new DatabaseSync!(freshDbPath())
 
@@ -206,7 +211,7 @@ describe.skipIf(!DatabaseSync)('数据库建表与升级（v6）', () => {
     db.exec(schema.CREATE_TABLES_SQL)
     db.exec(`PRAGMA user_version = ${schema.SCHEMA_VERSION}`)
 
-    expect(userVersion(db)).toBe(6)
+    expect(userVersion(db)).toBe(7)
 
     const tables = tableNames(db)
     for (const table of [
@@ -273,6 +278,7 @@ describe.skipIf(!DatabaseSync)('数据库建表与升级（v6）', () => {
         'repeat_count',
         'dose',
         'unit',
+        'effective_from',
       ]),
     )
 
@@ -394,7 +400,7 @@ describe.skipIf(!DatabaseSync)('数据库建表与升级（v6）', () => {
     db.close()
   })
 
-  it('v4 老库打开后被重建为 v6：旧表消失、新表存在、user_version = 6', async () => {
+  it('v4 老库打开后被重建为 v7：旧表消失、新表存在、user_version = 7', async () => {
     const schema = await loadSchema()
     const db = new DatabaseSync!(freshDbPath())
 
@@ -426,7 +432,7 @@ describe.skipIf(!DatabaseSync)('数据库建表与升级（v6）', () => {
     db.exec(schema.CREATE_TABLES_SQL)
     db.exec(`PRAGMA user_version = ${schema.SCHEMA_VERSION}`)
 
-    expect(userVersion(db)).toBe(6)
+    expect(userVersion(db)).toBe(7)
 
     const tables = tableNames(db)
     for (const table of OLD_TABLES) {
@@ -512,10 +518,11 @@ describe.skipIf(!DatabaseSync)('数据库建表与升级（v6）', () => {
     const db = new DatabaseSync!(freshDbPath())
     db.exec('PRAGMA foreign_keys = ON')
 
-    // 用最新结构建库，再退回 v5 的样子（去掉 v6 新增的列与表）
+    // 用最新结构建库，再退回 v5 的样子（去掉 v6/v7 新增的列与表）
     db.exec(schema.CREATE_TABLES_SQL)
     db.exec('DROP TABLE efficacy_event')
     db.exec('ALTER TABLE treatment_line DROP COLUMN ended_at')
+    db.exec('ALTER TABLE treatment_phase DROP COLUMN effective_from')
     db.exec('PRAGMA user_version = 5')
 
     db.prepare(
@@ -551,10 +558,12 @@ describe.skipIf(!DatabaseSync)('数据库建表与升级（v6）', () => {
 
     // 复刻 index.ts 的 migrate(fromVersion = 5)
     db.exec(schema.MIGRATION_6_SQL)
+    db.exec(schema.MIGRATION_7_SQL)
     db.exec(`PRAGMA user_version = ${schema.SCHEMA_VERSION}`)
 
-    expect(userVersion(db)).toBe(6)
+    expect(userVersion(db)).toBe(7)
     expect(columnNames(db, 'treatment_line')).toContain('ended_at')
+    expect(columnNames(db, 'treatment_phase')).toContain('effective_from')
     expect(tableNames(db)).toContain('efficacy_event')
 
     // 原有数据一行不少
@@ -617,7 +626,7 @@ describe.skipIf(!DatabaseSync)('数据库建表与升级（v6）', () => {
 
     db.exec(schema.buildV6RepairSql({ hasEndedAt: false, hasEfficacyTable: false }))
 
-    expect(userVersion(db)).toBe(6)
+    expect(userVersion(db)).toBe(7)
     expect(columnNames(db, 'treatment_line')).toContain('ended_at')
     expect(tableNames(db)).toContain('efficacy_event')
     expect(indexNames(db, 'efficacy_event')).toContain('idx_efficacy_event_line_time')
@@ -625,7 +634,27 @@ describe.skipIf(!DatabaseSync)('数据库建表与升级（v6）', () => {
     db.close()
   })
 
-  it('清库 SQL 在 v6 库上可执行，并清掉全部业务数据', async () => {
+  it('user_version 已是 v7，但 treatment_phase 缺 effective_from 时可以补齐', async () => {
+    const schema = await loadSchema()
+    const db = new DatabaseSync!(freshDbPath())
+    db.exec(schema.CREATE_TABLES_SQL)
+    db.exec('ALTER TABLE treatment_phase DROP COLUMN effective_from')
+    db.exec('PRAGMA user_version = 7')
+
+    expect(schema.buildV7RepairSql({ hasEffectiveFrom: false })).toContain(
+      'ADD COLUMN effective_from',
+    )
+    expect(schema.buildV7RepairSql({ hasEffectiveFrom: true })).toBe('')
+
+    db.exec(schema.buildV7RepairSql({ hasEffectiveFrom: false }))
+
+    expect(userVersion(db)).toBe(7)
+    expect(columnNames(db, 'treatment_phase')).toContain('effective_from')
+
+    db.close()
+  })
+
+  it('清库 SQL 在 v7 库上可执行，并清掉全部业务数据', async () => {
     const schema = await loadSchema()
     const db = new DatabaseSync!(freshDbPath())
     db.exec(schema.CREATE_TABLES_SQL)

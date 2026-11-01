@@ -295,6 +295,7 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
             repeatCount: 0,
             dose: latest?.dose ?? medication.defaultDose,
             unit: latest?.unit ?? medication.unit,
+            effectiveFrom: null,
           },
         ],
         oral: null,

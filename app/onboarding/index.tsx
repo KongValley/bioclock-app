@@ -24,6 +24,7 @@ import {
 } from '@/data/catalog'
 import {
   medications as medicationRepo,
+  doseLogs as doseLogRepo,
   reminderRules,
   settings as settingsRepo,
   treatments as treatmentRepo,
@@ -37,7 +38,7 @@ import { Chip } from '@/ui/components/Chip'
 import { TextField } from '@/ui/components/Field'
 import { SegmentedControl } from '@/ui/components/SegmentedControl'
 import { Stepper } from '@/ui/components/Stepper'
-import { TimeOfDayField } from '@/ui/components/TimeField'
+import { TimeOfDayField, DateTimeField } from '@/ui/components/TimeField'
 import { Icon } from '@/ui/components/Icon'
 import { Screen } from '@/ui/components/Layout'
 import { toast, ToastHost } from '@/ui/components/Toast'
@@ -155,6 +156,8 @@ export default function OnboardingScreen() {
   const [basePhases, setBasePhases] = useState<EditablePhase[]>([])
   const [phases, setPhases] = useState<EditablePhase[]>([])
   const [noLoading, setNoLoading] = useState(false)
+  const [hasLastInjection, setHasLastInjection] = useState(false)
+  const [lastInjectionAt, setLastInjectionAt] = useState<number>(() => Date.now())
 
   const [timeOfDay, setTimeOfDay] = useState('09:00')
   const [offsets, setOffsets] = useState<number[]>([-2, -1, 0])
@@ -397,6 +400,16 @@ export default function OnboardingScreen() {
       setFinishError('免打扰时间格式不合法。')
       return
     }
+    if (
+      selectedRoute !== 'oral' &&
+      hasLastInjection &&
+      (!Number.isFinite(lastInjectionAt) ||
+        lastInjectionAt <= 0 ||
+        lastInjectionAt > Date.now() + 24 * 60 * 60 * 1000)
+    ) {
+      setFinishError('上次注射时间不能晚于今天。')
+      return
+    }
 
     setFinishing(true)
     try {
@@ -491,12 +504,33 @@ export default function OnboardingScreen() {
                   repeatCount: phase.repeatCount,
                   dose: phase.doseText.trim() === '' ? null : Number(phase.doseText.trim()),
                   unit: phase.unit.trim(),
+                  effectiveFrom: null,
                 })),
                 oral: null,
               },
         ],
       })
       await treatmentRepo.setActive(treatment.id, true)
+      if (!oralRoute && hasLastInjection) {
+        const createdLine = treatment.lines[0]
+        const lastPhase = phases[phases.length - 1]
+        if (createdLine) {
+          await doseLogRepo.create({
+            lineId: createdLine.id,
+            scheduledAt: lastInjectionAt,
+            takenAt: lastInjectionAt,
+            status: 'done',
+            dose:
+              lastPhase && lastPhase.doseText.trim() !== ''
+                ? Number(lastPhase.doseText.trim())
+                : null,
+            unit: lastPhase?.unit.trim() || 'mg',
+            site: null,
+            lotNumber: null,
+            note: '首次设置时录入的历史注射',
+          })
+        }
+      }
       await reminderRules.upsert({
         treatmentId: treatment.id,
         offsets,
@@ -963,6 +997,49 @@ export default function OnboardingScreen() {
         placeholder="例如：阿达木单抗 每 2 周"
         accessibilityLabel="用药方案名称"
       />
+
+      {selectedRoute !== 'oral' ? (
+        <Card>
+          <View style={{ gap: theme.spacing.md }}>
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: theme.spacing.md,
+              }}
+            >
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text
+                  style={{
+                    color: theme.colors.text,
+                    fontSize: theme.fontSize.sm,
+                    fontWeight: '600',
+                  }}
+                >
+                  我已经打过至少一针
+                </Text>
+                <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.xs }}>
+                  录入上次注射时间后，下一次会从这次起算；不填则从今天开始。
+                </Text>
+              </View>
+              <Switch
+                accessibilityLabel="我已经打过至少一针"
+                value={hasLastInjection}
+                onValueChange={setHasLastInjection}
+                trackColor={{ false: theme.colors.border, true: theme.colors.primary }}
+                thumbColor={theme.colors.surface}
+              />
+            </View>
+            {hasLastInjection ? (
+              <DateTimeField
+                label="上次注射时间"
+                value={lastInjectionAt}
+                onChange={setLastInjectionAt}
+              />
+            ) : null}
+          </View>
+        </Card>
+      ) : null}
 
       {hasLoadingPhase ? (
         <View

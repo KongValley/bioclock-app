@@ -348,6 +348,7 @@ interface PhaseDraft {
   repeatCount: number
   doseText: string
   unit: string
+  effectiveFrom: number | null
 }
 
 interface OralDraft {
@@ -380,7 +381,14 @@ function nextKey(prefix: string): string {
 }
 
 function defaultPhase(): PhaseDraft {
-  return { kind: 'maintenance', intervalDays: 28, repeatCount: 0, doseText: '', unit: 'mg' }
+  return {
+    kind: 'maintenance',
+    intervalDays: 28,
+    repeatCount: 0,
+    doseText: '',
+    unit: 'mg',
+    effectiveFrom: null,
+  }
 }
 
 function defaultOral(): OralDraft {
@@ -430,6 +438,7 @@ function lineToDraft(line: TreatmentLine): LineDraft {
       repeatCount: phase.repeatCount,
       doseText: phase.dose === null ? '' : String(phase.dose),
       unit: phase.unit,
+      effectiveFrom: phase.effectiveFrom,
     })),
     oral: line.oral
       ? {
@@ -546,6 +555,7 @@ function buildLineInput(line: LineDraft): TreatmentLineDraft {
       repeatCount: phase.repeatCount,
       dose: phase.doseText.trim() === '' ? null : Number(phase.doseText.trim()),
       unit: phase.unit.trim(),
+      effectiveFrom: phase.effectiveFrom,
     })),
   }
 }

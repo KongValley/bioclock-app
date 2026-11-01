@@ -264,7 +264,16 @@ export const useAppStore = create<AppStore>((set) => ({
     const next = selectNextPlan(plans, now)
     if (!next) throw new Error('这条用药线没有可调整的下一针')
 
-    const phases = buildIntervalChangePhases(line.phases, next.index, intervalDays)
+    const previous = plans
+      .filter((plan) => plan.index < next.index)
+      .sort((a, b) => b.index - a.index)[0]
+    const base =
+      line.anchor === 'actual'
+        ? previous?.actualAt ?? previous?.plannedAt ?? now
+        : previous?.plannedAt ?? now
+    const effectiveFrom = base + intervalDays * 24 * 60 * 60 * 1000
+
+    const phases = buildIntervalChangePhases(line.phases, intervalDays, effectiveFrom)
     await treatmentRepo.update(line.treatmentId, {
       lines: [{ id: line.id, phases }],
     })

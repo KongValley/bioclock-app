@@ -163,6 +163,8 @@ export interface TreatmentPhase {
   repeatCount: number
   dose: number | null
   unit: string
+  /** 间隔调整的生效时间；null 表示从第一阶段起按顺序执行 */
+  effectiveFrom: number | null
 }
 
 /** 口服计划：注射线的 `oral` 为 null */
