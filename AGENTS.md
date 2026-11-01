@@ -99,8 +99,9 @@ repo 写入 → useAppStore.reload() → rescheduleAll() → 返回 notifyWarnin
 
 ## 7. 导入 / 导出
 
-- 导入格式 v1：`format: "bioclock-import"`, `version: 1`，字段定义见 `docs/import-format.md`。
-- 解析器 `src/import/schema.ts` 必须是纯函数（不碰 React Native），便于 vitest 直接测。
+- 导入：支持 `.xlsx` / `.xls` / `.json`。格式 v1 见 `docs/import-format.md`。
+- 解析器 `src/import/schema.ts`、`src/import/spreadsheet.ts` 必须是纯函数（不碰 React Native），便于 vitest 直接测。
+- Excel 用 `xlsx`（SheetJS）解析，别再引入第二个表格库；日期既支持文本也支持 Excel 序列号。
 - 落库 `src/import/index.ts`：整个文件一个事务；注射必须已有方案；药名匹配不到就落到当前方案的药；重复记录跳过；症状里的新标签自动补进 `symptom_tag`。
 - **不要改格式字段名**。网页工具、示例文件、解析器、文档四处必须同步改，并补 `src/import/__tests__` 测试。
 - CSV 导出只导出注射记录，表头顺序对用户可见，改动要谨慎。
@@ -110,6 +111,7 @@ repo 写入 → useAppStore.reload() → rescheduleAll() → 返回 notifyWarnin
 
 - 纯静态、无框架、无构建、无 CDN，双击 `index.html` 就能用。
 - 病种/药名/默认症状来自 `src/meta.js`，由 `npm run import-editor` 从 App 源码生成；**不要手改 `meta.json` / `meta.js`**。
+- Excel 读写用本地 vendored 的 SheetJS（`src/vendor/xlsx.full.min.js`，Apache-2.0），不要改成 CDN。
 - 时间输出必须是 `YYYY-MM-DD HH:mm`。
 - 改完在浏览器里实际点一遍：添加/编辑/删除、下载、导入已有 JSON、深浅色。
 - GitHub Pages 部署从仓库根目录的 `tools/import-editor` 构建（见 workflow）。

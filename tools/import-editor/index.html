@@ -27,8 +27,8 @@
       <section class="card intro">
         <h2>怎么用</h2>
         <ol class="steps">
-          <li>在下面按时间顺序补录注射和症状，点「添加」。</li>
-          <li>点「下载 JSON」，把文件发到手机（微信文件传输/数据线都行）。</li>
+          <li>在下面按时间顺序补录注射和症状，点「添加」；也可以下载 Excel 模板，在 Excel 里填。</li>
+          <li>点「下载 Excel」或「下载 JSON」，把文件发到手机（微信文件传输/数据线都行）。</li>
           <li>手机上打开 BioClock → 设置 → 导入数据 → 选择这个文件。</li>
         </ol>
         <p class="note">
@@ -175,7 +175,9 @@
         </div>
 
         <div class="output-actions">
-          <button type="button" class="primary" id="download">下载 JSON</button>
+          <button type="button" class="primary" id="download-excel">下载 Excel</button>
+          <button type="button" class="secondary" id="download-template">下载空白模板</button>
+          <button type="button" class="secondary" id="download">下载 JSON</button>
           <button type="button" class="secondary" id="copy">复制 JSON</button>
           <label class="secondary file-button">
             导入已有 JSON
@@ -196,6 +198,7 @@
       </footer>
     </main>
 
+    <script src="./src/vendor/xlsx.full.min.js"></script>
     <script src="./src/meta.js"></script>
     <script src="./src/app.js"></script>
   </body>

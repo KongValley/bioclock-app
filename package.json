@@ -36,6 +36,7 @@
     "react-native-svg": "15.16.0",
     "react-native-web": "~0.21.4",
     "react-native-worklets": "0.13.0",
+    "xlsx": "^0.18.5",
     "zod": "^4.6.7",
     "zustand": "^5.0.16"
   },
@@ -54,7 +55,8 @@
     "lint": "expo lint",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "import-editor": "node tools/import-editor/scripts/generate-meta.mjs"
+    "import-editor": "node tools/import-editor/scripts/generate-meta.mjs",
+    "import-template": "node tools/import-editor/scripts/make-template.mjs"
   },
   "private": true
 }

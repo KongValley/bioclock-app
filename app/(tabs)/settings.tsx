@@ -27,6 +27,7 @@ import { regimens as regimenRepo } from '@/db/repo'
 import { cancelAll, rescheduleAll } from '@/notify/scheduler'
 import { exportCsv, exportPdf, shareFile } from '@/export'
 import { parseImportJson, type ImportPayload } from '@/import/schema'
+import { parseSpreadsheet } from '@/import/spreadsheet'
 import { DISEASE_GROUPS, diseasesByGroup, diseasesLabel, resolveDiseaseIds } from '@/data/diseases'
 import type { Disease, Regimen } from '@/types'
 import { Button } from '@/ui/components/Button'
@@ -53,12 +54,20 @@ const PDF_RANGES = [90, 180, 365]
  * （Missing 'READ' permission），但 React Native 的 fetch 直接走 Uri 读取，
  * 不受这层权限校验影响；先试 fetch，失败再退回 expo-file-system。
  */
+async function readPickedBuffer(uri: string): Promise<ArrayBuffer> {
+  const response = await fetch(uri)
+  if (!response.ok) throw new Error(`读取文件失败（HTTP ${response.status}）`)
+  return await response.arrayBuffer()
+}
+
 async function readPickedText(uri: string): Promise<string> {
   try {
     const response = await fetch(uri)
     if (!response.ok) throw new Error(`读取文件失败（HTTP ${response.status}）`)
     return await response.text()
   } catch (error) {
+    // Expo Go 里 expo-file-system 对 picker 缓存文件的权限判断有问题，
+    // fetch 能读时优先用 fetch；失败再退回 expo-file-system。
     try {
       return await readAsStringAsync(uri)
     } catch {
@@ -594,8 +603,15 @@ export default function SettingsScreen() {
       const asset = picked.assets?.[0]
       if (!asset) return
 
-      const text = await readPickedText(asset.uri)
-      const payload = parseImportJson(text)
+      const name = (asset.name ?? '').toLowerCase()
+      let payload: ImportPayload
+      if (name.endsWith('.json')) {
+        payload = parseImportJson(await readPickedText(asset.uri))
+      } else if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
+        payload = parseSpreadsheet(await readPickedBuffer(asset.uri))
+      } else {
+        throw new Error('只支持 .xlsx / .xls / .json 文件')
+      }
       setPendingImport(payload)
     } catch (error) {
       toast(`读取失败：${errorMessage(error)}`, 'error')
@@ -970,7 +986,7 @@ export default function SettingsScreen() {
             hint={
               importBusy
                 ? '正在读取文件…'
-                : '从 JSON 文件批量补录注射与症状，重复记录会自动跳过'
+                : '从 Excel（.xlsx）或 JSON 文件批量补录，重复记录会自动跳过'
             }
             onPress={
               importBusy

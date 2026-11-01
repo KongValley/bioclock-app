@@ -194,6 +194,21 @@ function parseSymptom(value: unknown, index: number): ImportSymptom {
   }
 }
 
+export function parseImportRows(
+  injectionRows: unknown[],
+  symptomRows: unknown[],
+): ImportPayload {
+  if (injectionRows.length + symptomRows.length === 0) fail('文件里没有任何记录')
+  if (injectionRows.length > IMPORT_MAX_ROWS || symptomRows.length > IMPORT_MAX_ROWS) {
+    fail(`单次最多导入 ${IMPORT_MAX_ROWS} 条记录，请拆分成多个文件`)
+  }
+
+  return {
+    injections: injectionRows.map((row, index) => parseInjection(row, index)),
+    symptoms: symptomRows.map((row, index) => parseSymptom(row, index)),
+  }
+}
+
 export function parseImportJson(text: string): ImportPayload {
   const cleaned = text.replace(/^\uFEFF/, '').trim()
   if (cleaned === '') fail('文件是空的')
@@ -213,15 +228,8 @@ export function parseImportJson(text: string): ImportPayload {
     fail(`不支持的导入文件版本：${String(raw.version)}，当前仅支持版本 ${IMPORT_VERSION}`)
   }
 
-  const injectionRows = readArray(raw.injections, 'injections')
-  const symptomRows = readArray(raw.symptoms, 'symptoms')
-  if (injectionRows.length + symptomRows.length === 0) fail('文件里没有任何记录')
-  if (injectionRows.length > IMPORT_MAX_ROWS || symptomRows.length > IMPORT_MAX_ROWS) {
-    fail(`单次最多导入 ${IMPORT_MAX_ROWS} 条记录，请拆分成多个文件`)
-  }
-
-  return {
-    injections: injectionRows.map((row, index) => parseInjection(row, index)),
-    symptoms: symptomRows.map((row, index) => parseSymptom(row, index)),
-  }
+  return parseImportRows(
+    readArray(raw.injections, 'injections'),
+    readArray(raw.symptoms, 'symptoms'),
+  )
 }

@@ -77,7 +77,6 @@ try {
   const sites = Object.entries(rotation.SITE_LABELS).map(([value, label]) => ({ value, label }))
 
   const output = {
-    generatedAt: new Date().toISOString(),
     diseaseOptions,
     drugsByDisease,
     allDrugs,

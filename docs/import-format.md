@@ -1,9 +1,36 @@
 # BioClock 导入文件格式（v1）
 
-设置 → 导入数据 支持从 JSON 文件批量补录注射和症状。
+设置 → 导入数据 支持从 **Excel（.xlsx / .xls）或 JSON** 文件批量补录注射和症状。
 用 [`tools/import-editor`](../tools/import-editor) 网页工具填写导出，或按本文档手写。
 
-## 顶层结构
+## Excel 格式（推荐）
+
+工作簿可以包含两个工作表（名称里带「注射」「症状」即可识别）：
+
+**「注射记录」**
+
+| 注射时间 * | 药物 | 剂量 | 单位 | 部位 | 批号 | 备注 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2026-03-15 09:00 | 阿达木单抗 | 40 | mg | 腹部左上 | AB12345 | 第一针 |
+
+**「症状记录」**
+
+| 记录时间 * | 严重程度 | 疼痛评分 | 症状 | 体温(℃) | 备注 | 关联注射时间 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2026-03-30 20:30 | 4 | 6 | 发热、乏力 | 37.8 | 晚上加重 | 2026-03-29 09:10 |
+
+规则：
+
+- 时间可以写文本 `2026-03-15 09:00`，也可以直接用 Excel 的日期时间单元格。
+- 表头支持别名：`药名/药品`、`部位`、`批次`、`记录时间/时间`、`症状标签` 等；括号里的单位会被忽略。
+- 症状用顿号、逗号、分号分隔，导入时会去重；新症状会自动加进症状标签表。
+- 只有一个工作表时，按表头自动判断是注射还是症状。
+- 空白行自动跳过；示例行可以直接删掉或覆盖。
+- 模板：[`tools/import-editor/templates/bioclock-import-template.xlsx`](../tools/import-editor/templates/bioclock-import-template.xlsx)
+
+## JSON 格式
+
+顶层结构：
 
 ```json
 {
@@ -94,7 +121,7 @@ YYYY-MM-DD HH:mm
 | `note` | 否 | 备注 |
 | `injectionAt` | 否 | 关联一条注射记录（时间需完全一致）；找不到时按未关联处理 |
 
-## 导入行为
+## 导入行为（JSON 与 Excel 相同）
 
 - **重复跳过**：注射按「时间 + 药物」、症状按「时间 + 严重程度 + 症状组合」判断，已存在则跳过，并在结果里提示跳过条数。
 - **药物匹配**：`medication` 先按药名/通用名匹配当前数据库里的药；匹配不到就用当前方案关联的药。不会自动新建药物。
@@ -104,4 +131,4 @@ YYYY-MM-DD HH:mm
 
 ## 示例
 
-完整示例见 [`tools/import-editor/sample-import.json`](../tools/import-editor/sample-import.json)。
+完整示例见 [`tools/import-editor/sample-import.json`](../tools/import-editor/sample-import.json)，Excel 模板见 [`tools/import-editor/templates/`](../tools/import-editor/templates/)。

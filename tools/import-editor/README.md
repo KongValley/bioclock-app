@@ -21,11 +21,18 @@ python -m http.server 4173 --directory tools/import-editor
 ## 流程
 
 1. 选择病种（可多选，克罗恩病 + 强直性脊柱炎会合并药物列表）。
-2. 在「注射记录 / 症状记录」里逐条填写，点「添加」。
-3. 点「下载 JSON」，把文件传到手机。
+2. 在「注射记录 / 症状记录」里逐条填写，点「添加」；也可以直接「下载空白模板」，在 Excel 里填。
+3. 点「下载 Excel」或「下载 JSON」，把文件传到手机。
 4. App 里：设置 → 导入数据 → 选择文件 → 确认。
 
 App 会按「时间 + 药 / 时间 + 严重程度 + 症状」跳过重复记录，重复导入同一个文件不会翻倍。
+
+## Excel
+
+- 「下载空白模板」生成带表头、示例行和「填写说明」的 `.xlsx`。
+- 「下载 Excel」导出当前编辑器里的记录，同样是两个工作表（注射记录 / 症状记录）。
+- Excel 的列定义见 [`docs/import-format.md`](../../docs/import-format.md#excel-格式推荐)。
+- 模板文件也直接放在 [`templates/bioclock-import-template.xlsx`](./templates/bioclock-import-template.xlsx)。
 
 ## 字段与格式
 
@@ -40,7 +47,10 @@ tools/import-editor/
   src/app.js              全部交互逻辑（原生 JS，无框架）
   src/meta.js             由脚本生成，勿手改
   src/meta.json           同上，给需要 fetch 的场景
-  scripts/generate-meta.mjs  从 App 目录数据生成 meta
+  src/vendor/xlsx.full.min.js   SheetJS，离线读写 Excel（Apache-2.0）
+  scripts/generate-meta.mjs     从 App 目录数据生成 meta
+  scripts/make-template.mjs     生成 Excel 模板
+  templates/               Excel 导入模板
   sample-import.json      示例文件
 ```
 

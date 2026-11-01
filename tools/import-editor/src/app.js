@@ -10,6 +10,11 @@
       '<p style="padding:24px;font-family:sans-serif">缺少 src/meta.js，请先运行 <code>npm run import-editor</code> 生成数据。</p>'
     return
   }
+  if (typeof XLSX === 'undefined') {
+    document.body.innerHTML =
+      '<p style="padding:24px;font-family:sans-serif">缺少 src/vendor/xlsx.full.min.js，请重新拉取仓库或运行 <code>npm install</code> 后复制该文件。</p>'
+    return
+  }
 
   const STORAGE_KEY = 'bioclock-import-editor-v1'
   const SEVERITY_LABELS = ['很轻', '较轻', '中等', '较重', '严重']
@@ -565,6 +570,104 @@
     $('json-preview').textContent = JSON.stringify(buildPayload(), null, 2)
   }
 
+  const INJECTION_HEADERS = ['注射时间', '药物', '剂量', '单位', '部位', '批号', '备注']
+  const SYMPTOM_HEADERS = [
+    '记录时间',
+    '严重程度',
+    '疼痛评分',
+    '症状',
+    '体温(℃)',
+    '备注',
+    '关联注射时间',
+  ]
+
+  function dateStamp() {
+    const date = new Date()
+    return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`
+  }
+
+  function buildSheet(headers, rows, widths) {
+    const sheet = XLSX.utils.aoa_to_sheet([headers, ...rows])
+    sheet['!cols'] = widths.map((width) => ({ wch: width }))
+    return sheet
+  }
+
+  function injectionSheetRows() {
+    return sortByTime(state.injections, 'injectedAt').map((row) => [
+      row.injectedAt,
+      row.medication,
+      row.dose === '' ? '' : Number(row.dose),
+      row.unit,
+      labelOfSite(row.site),
+      row.lotNumber,
+      row.note,
+    ])
+  }
+
+  function symptomSheetRows() {
+    return sortByTime(state.symptoms, 'loggedAt').map((row) => [
+      row.loggedAt,
+      row.severity,
+      row.painScore === '' ? '' : Number(row.painScore),
+      row.tags.join('、'),
+      row.temperature === '' ? '' : Number(row.temperature),
+      row.note,
+      row.injectionAt,
+    ])
+  }
+
+  function labelOfSite(value) {
+    const site = META.sites.find((item) => item.value === value)
+    return site ? site.label : value
+  }
+
+  function buildWorkbook(injections, symptoms) {
+    const workbook = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(
+      workbook,
+      buildSheet(INJECTION_HEADERS, injections, [18, 16, 8, 8, 12, 12, 28]),
+      '注射记录',
+    )
+    XLSX.utils.book_append_sheet(
+      workbook,
+      buildSheet(SYMPTOM_HEADERS, symptoms, [18, 10, 10, 24, 10, 28, 18]),
+      '症状记录',
+    )
+    return workbook
+  }
+
+  function downloadExcel() {
+    if (state.injections.length === 0 && state.symptoms.length === 0) {
+      showStatus('还没有任何记录，先补录一条再导出。', 'error')
+      return
+    }
+    const workbook = buildWorkbook(injectionSheetRows(), symptomSheetRows())
+    XLSX.writeFile(workbook, `bioclock-import-${dateStamp()}.xlsx`)
+    showStatus(`已导出 ${state.injections.length} 条注射、${state.symptoms.length} 条症状`)
+  }
+
+  function downloadTemplate() {
+    const workbook = buildWorkbook(
+      [['2026-03-15 09:00', '阿达木单抗', 40, 'mg', '腹部左上', 'AB12345', '示例行，可删除']],
+      [['2026-03-30 20:30', 4, 6, '发热、乏力', 37.8, '示例行，可删除', '2026-03-15 09:00']],
+    )
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.aoa_to_sheet([
+        ['填写说明'],
+        ['1. 时间格式：2026-03-15 09:00（本地时间，不要写时区）'],
+        ['2. 注射记录：注射时间、药物必填；部位可写中文（腹部左上）或留空'],
+        ['3. 症状记录：记录时间必填；严重程度 1–5；疼痛评分 0–10；症状用顿号或逗号分隔'],
+        ['4. 关联注射时间可选，要和某条注射记录的注射时间完全一致'],
+        ['5. 不要修改表头名称；示例行可以删除或直接覆盖'],
+        ['6. 填好后保存为 .xlsx，在 App 的 设置 → 导入数据 里选择该文件'],
+      ]),
+      '填写说明',
+    )
+    XLSX.writeFile(workbook, 'bioclock-import-template.xlsx')
+    showStatus('模板已下载')
+  }
+
   function download() {
     if (state.injections.length === 0 && state.symptoms.length === 0) {
       showStatus('还没有任何记录，先补录一条再导出。', 'error')
@@ -701,6 +804,8 @@
     })
 
     $('download').addEventListener('click', download)
+    $('download-excel').addEventListener('click', downloadExcel)
+    $('download-template').addEventListener('click', downloadTemplate)
     $('copy').addEventListener('click', () => {
       void copyJson()
     })
