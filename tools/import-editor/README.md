@@ -1,6 +1,6 @@
 # BioClock 导入编辑器
 
-一个纯静态网页工具：把纸质/记忆里的注射和症状补录成 BioClock 可以导入的 JSON。
+一个纯静态网页工具：把纸质/记忆里的注射、口服打卡和症状补录成 BioClock 可以导入的 JSON / Excel。
 不需要登录、不联网、不上传数据，所有内容只存在浏览器 localStorage。
 
 ## 打开方式
@@ -21,22 +21,25 @@ python -m http.server 4173 --directory tools/import-editor
 ## 流程
 
 1. 选择病种（可多选，克罗恩病 + 强直性脊柱炎会合并药物列表）。
-2. 在「注射记录 / 症状记录」里逐条填写，点「添加」；也可以直接「下载空白模板」，在 Excel 里填。
-3. 点「下载 Excel」或「下载 JSON」，把文件传到手机。
-4. App 里：设置 → 导入数据 → 选择文件 → 确认。
+2. 目录里没有的药（国产仿制药、口服药等）在「我的药物」里加一条，导出时会随文件带给 App。
+3. 在「注射记录 / 症状记录 / 口服打卡」里逐条填写，点「添加」；也可以直接「下载空白模板」，在 Excel 里填。
+4. 点「下载 Excel」或「下载 JSON」，把文件传到手机。
+5. App 里：设置 → 导入数据 → 选择文件 → 确认。
 
-App 会按「时间 + 药 / 时间 + 严重程度 + 症状」跳过重复记录，重复导入同一个文件不会翻倍。
+App 会按「时间 + 用药线」跳过重复记录，症状按「时间 + 严重程度 + 症状」去重，重复导入同一个文件不会翻倍。
 
 ## Excel
 
 - 「下载空白模板」生成带表头、示例行和「填写说明」的 `.xlsx`。
-- 「下载 Excel」导出当前编辑器里的记录，同样是两个工作表（注射记录 / 症状记录）。
+- 「下载 Excel」导出当前编辑器里的内容，共四张数据表（`注射记录` / `口服打卡` / `症状记录` / `药物`）+ 一张 `填写说明`。
+- 药物表里 `目录标识` 留空表示自定义药物；目录里有的药会带上 `catalogKey`。
 - Excel 的列定义见 [`docs/import-format.md`](../../docs/import-format.md#excel-格式推荐)。
-- 模板文件也直接放在 [`templates/bioclock-import-template.xlsx`](./templates/bioclock-import-template.xlsx)。
+- 模板文件也直接放在 [`templates/bioclock-import-template.xlsx`](./templates/bioclock-import-template.xlsx)，用 `npm run import-template` 重新生成。
 
 ## 字段与格式
 
 导出文件格式（同时也是 App 的导入格式）见仓库 [`docs/import-format.md`](../../docs/import-format.md)。
+当前是 **v2**：`{ format, version: 2, medications, injections, oralLogs, symptoms }`，App 仍接受 v1 文件。
 
 ## 修改这个工具
 
@@ -65,6 +68,6 @@ npm run import-editor
 
 用 MiniMax Code 改这个工具时，注意：
 
-- 导出的 JSON 必须保持 `format: "bioclock-import"`、`version: 1`，字段名和 `docs/import-format.md` 一致。
+- 导出的 JSON 必须保持 `format: "bioclock-import"`、`version: 2`（同时能读 v1），字段名和 `docs/import-format.md` 一致。
 - 时间统一写本地时间字符串 `YYYY-MM-DD HH:mm`，不要写 ISO + Z。
 - 不要引入构建步骤或外部 CDN，保持双击可用。

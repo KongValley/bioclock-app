@@ -18,7 +18,7 @@ BioClock：记录生物制剂注射、提醒下次注射、记录症状的个人
 2. **不联网**。不要新增 HTTP 请求、云同步、账号、第三方分析 SDK。导入/导出都走本地文件。
 3. **不收集隐私**。日志、崩溃上报、埋点一律不加；数据库文件（`*.db`）和导出的 CSV/PDF 不能提交进仓库。
 4. **文案要克制**。涉及症状、依从性的页面保留"仅用于自我观察，不构成因果判断"这类提示。
-5. **不要删用户数据**。迁移只能加列/加表；清库逻辑必须保留内置药物并重新播种。任何破坏性操作要有二次确认。
+5. **不要删用户数据**。v5 的整套表重建是用户已确认的一次性例外（见第 6 节），之后的结构变更只能加列/加表；清库逻辑必须保留内置药物并重新播种。任何破坏性操作要有二次确认。
 
 ## 3. 常用命令
 
@@ -30,6 +30,7 @@ npm run web               # 浏览器（expo-sqlite 能力受限）
 npm run typecheck         # tsc --noEmit
 npm test                  # vitest（纯函数 + 迁移测试）
 npm run import-editor     # 重新生成 tools/import-editor/src/meta.{json,js}
+npm run import-template   # 重新生成 Excel 导入模板 tools/import-editor/templates/*.xlsx
 ```
 
 本机是 Windows + PowerShell 5.1。跑完改动至少执行 `npm run typecheck` 和 `npm test`。
@@ -40,18 +41,18 @@ npm run import-editor     # 重新生成 tools/import-editor/src/meta.{json,js}
 app/                      expo-router 路由
   (tabs)/                 今天 / 记录 / 趋势 / 设置
   onboarding/             四步引导：病种(可多选) → 药物 → 方案 → 提醒
-  modal/                  注射登记、症状登记（支持 ?id= 编辑）
+  modal/                  注射登记、口服打卡、症状登记（支持 ?id= 编辑）
 src/
   data/                   病种、生物制剂目录与方案模板（只读）
   db/                     建表、迁移、播种、仓库层
-  domain/                 排程、部位轮换、依从性、疼痛分档（纯函数 + 单测）
+  domain/                 排程（含口服）、部位轮换、依从性、疼痛分档、药名匹配（纯函数 + 单测）
   import/                 导入文件解析与落库
   notify/                 本地通知排程
-  export/                 CSV / PDF 导出
+  export/                 CSV / Excel / JSON / PDF 导出
   store/                  zustand 全局状态
   ui/                     主题、通用组件、图标
 docs/                     设计方案、接口契约、导入格式
-tools/import-editor/      补录数据并导出 JSON 的静态网页工具
+tools/import-editor/      补录数据并导出 JSON / Excel 的静态网页工具
 ```
 
 路径别名：`@/*` → `src/*`。
@@ -71,14 +72,41 @@ tools/import-editor/      补录数据并导出 JSON 的静态网页工具
 
 ## 6. 数据层规则
 
+当前是 **v5「治疗组合」模型**（`SCHEMA_VERSION = 5`），表结构见 `src/db/schema.ts`：
+
+| 表 | 用途 |
+| --- | --- |
+| `medication` | 药物；`route` 为 `sc / iv / oral`，`brand_names`、`disease_ids`、`extra` 存 JSON 文本 |
+| `treatment` | 治疗组合；同一时间只有一个 `is_active = 1` |
+| `treatment_line` | 每条药一条；`kind` 为 `injection / oral`。注射线用 `is_host`、`sync_with_host`、`anchor`、`window_days`，口服线用 `oral_*` 列 |
+| `treatment_phase` | 仅注射线的阶段（`loading / maintenance`），按 `order_idx` 依次执行 |
+| `dose_log` | 注射与口服统一的打卡记录（`status` 为 `done / skipped / missed`） |
+| `reminder_rule` | 每个治疗方案一条，外键改为 `treatment_id` |
+| `symptom_log` / `symptom_tag` | 症状与可维护的标签；`symptom_log.dose_log_id` 关联打卡记录（对外类型仍叫 `injectionId`） |
+| `app_setting` | 键值设置 |
+
+`medication.brand_names` 是 JSON 字符串数组（仓库层转成 `string[]`），`medication.extra` 是 JSON 对象，
+导入/导出原样保留，核心逻辑不读 `extra`。`catalog_key` 有部分唯一索引，内置药靠它认领。
+
+### 迁移策略
+
+- `v5` 是整套方案模型重建：`regimen / regimen_phase / injection` 已被删除，改为 `treatment / treatment_line / treatment_phase / dose_log`。
+- 用户已确认开发阶段旧数据不必保留。`src/db/index.ts` 的 `buildMigrationSql()`：
+  - `user_version = 0`：只执行 `CREATE_TABLES_SQL`；
+  - `user_version = 1–4`：先执行 `DROP_ALL_TABLES_SQL`，再执行 `CREATE_TABLES_SQL`；
+  - 不再有 `MIGRATION_2/3/4_SQL`。
+- 重建后由 `openAndMigrate()` 重新播种内置药和症状标签。**这是唯一允许直接删旧表的例外**；
+  v5 之后的结构变更恢复「只加列/加表」的增量迁移，不要再 DROP 用户数据。
+- `DELETE_ALL_BUSINESS_DATA_SQL` 只删 v5 的业务表，保留内置药并重新播种标签；`DROP_ALL_TABLES_SQL` 同时列出新旧表名，保证老库能清干净。
+
 修改表结构时，以下文件必须一起改，缺一不可：
 
 1. `src/db/schema.ts`
    - `SCHEMA_VERSION` +1
    - `CREATE_TABLES_SQL`（新建库用，必须包含新列/新表）
-   - 新增 `MIGRATION_N_SQL`（只放增量 DDL）
+   - 新增对应的增量迁移（v5 之后的版本）
    - 更新 `DELETE_ALL_BUSINESS_DATA_SQL` / `DROP_ALL_TABLES_SQL`
-2. `src/db/index.ts` 的 `migrate()`：按版本号顺序执行，注意 `version === 0` 的分支只建表、不能再跑 ALTER
+2. `src/db/index.ts` 的 `buildMigrationSql()` / `migrate()`：按版本号分支，注意 `version === 0` 只建表、不能跑 ALTER
 3. `src/db/repo.ts`：行类型（snake_case）、映射（camelCase）、输入校验、错误信息用中文
 4. `src/types.ts`：对外类型
 5. `src/domain/__tests__/migration.test.ts`：补迁移测试（用 `node:sqlite` 真跑 SQL）
@@ -88,6 +116,9 @@ tools/import-editor/      补录数据并导出 JSON 的静态网页工具
 
 - 内置药：`seedBuiltinMedications` 按 `catalog_key` 认领
 - 症状标签：`seedBuiltinSymptomTags` 用 `app_setting.symptom_tags_seeded` 标记，**不要**用"表为空就播种"，否则用户删空后会被重新塞回来
+
+仓库层主要入口：`medications`、`treatments`（`list / getActive / get / create / addLine / setActive / update / remove`）、
+`doseLogs`（`list / listBetween / create / update / remove`）、`symptoms`、`symptomTags`、`reminderRules`、`settings`。
 
 写操作统一顺序（见 `src/store/app.ts`）：
 
@@ -99,13 +130,19 @@ repo 写入 → useAppStore.reload() → rescheduleAll() → 返回 notifyWarnin
 
 ## 7. 导入 / 导出
 
-- 导入：支持 `.xlsx` / `.xls` / `.json`。格式 v1 见 `docs/import-format.md`。
+- 导入：支持 `.xlsx` / `.xls` / `.json`。当前格式 **v2**（v1 仍兼容），见 `docs/import-format.md`。
+- JSON v2 顶层：`{ format, version: 2, medications, injections, oralLogs, symptoms }`。
+- Excel 五张工作表：`注射记录`、`症状记录`、`药物`、`口服打卡`、`填写说明`（App 导出的 `.xlsx` 另有只读的 `用药线`）。
 - 解析器 `src/import/schema.ts`、`src/import/spreadsheet.ts` 必须是纯函数（不碰 React Native），便于 vitest 直接测。
 - Excel 用 `xlsx`（SheetJS）解析，别再引入第二个表格库；日期既支持文本也支持 Excel 序列号。
-- 落库 `src/import/index.ts`：整个文件一个事务；注射必须已有方案；药名匹配不到就落到当前方案的药；重复记录跳过；症状里的新标签自动补进 `symptom_tag`。
+- 落库 `src/import/index.ts`：整个文件一个事务；包含打卡记录时必须已有激活的治疗方案；
+  - 药物按药名 / 通用名 / 商品名 / 内置目录名称互认，命中已有药只补空字段并合并商品名；
+  - 注射/口服记录按「药名 → 当前方案同药的用药线」解析，找不到线时**自动新建**（注射线用导入记录的中位间隔，口服线默认每天一次）；
+  - 重复记录按「打卡时间 + 用药线」跳过；症状按「时间 + 严重程度 + 症状组合」跳过；
+  - `previewImport` 用同一套逻辑只算数量，确认框显示将新建几条用药线；
+  - 症状里的新标签自动补进 `symptom_tag`。
 - **不要改格式字段名**。网页工具、示例文件、解析器、文档四处必须同步改，并补 `src/import/__tests__` 测试。
-- CSV 导出只导出注射记录，表头顺序对用户可见，改动要谨慎。
-- PDF 报告用内联 HTML + expo-print，不要引入 PDF 库。
+- 导出：CSV 只导出注射记录；Excel 导出 5 张表（含 `用药线`）；JSON 导出可直接再导入的 v2；PDF 报告用内联 HTML + expo-print。
 
 ## 8. 网页工具 `tools/import-editor`
 
@@ -173,6 +210,6 @@ npx expo export --platform android --output-dir .expo-verify   # 验证 Metro/He
 ## 12. 文档索引
 
 - `docs/design.md`：产品定位、信息架构、排程策略
-- `docs/contract.md`：模块接口与数据模型契约（含 v3 变更）
-- `docs/import-format.md`：导入文件格式与导入行为
+- `docs/contract.md`：模块接口与数据模型契约（含 v3、v5 变更；v5 已取代 v3 的 regimen 部分）
+- `docs/import-format.md`：导入文件格式（v2，兼容 v1）与导入行为
 - `tools/import-editor/README.md`：网页工具的结构与修改提示

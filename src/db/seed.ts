@@ -30,14 +30,15 @@ export async function seedBuiltinMedications(db: SQLiteDatabase): Promise<void> 
     )
 
     if (existing) {
+      // 名称、商品名、目录字段跟随目录更新；默认剂量保留用户改过的值。
       await db.runAsync(
         `UPDATE medication
-            SET name = ?, generic_name = ?, default_dose = ?, unit = ?, color = ?,
+            SET name = ?, generic_name = ?, brand_names = ?, unit = ?, color = ?,
                 route = ?, disease_ids = ?, catalog_key = ?, is_builtin = 1
           WHERE id = ?`,
         drug.name,
         drug.genericName,
-        drug.defaultDose,
+        JSON.stringify(drug.brandNames),
         drug.unit,
         drug.color,
         drug.route,
@@ -50,12 +51,13 @@ export async function seedBuiltinMedications(db: SQLiteDatabase): Promise<void> 
 
     await db.runAsync(
       `INSERT INTO medication
-        (id, name, generic_name, default_dose, unit, color, route, disease_ids,
-         catalog_key, is_builtin, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+        (id, name, generic_name, brand_names, default_dose, unit, color, route,
+         disease_ids, catalog_key, is_builtin, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
       Crypto.randomUUID(),
       drug.name,
       drug.genericName,
+      JSON.stringify(drug.brandNames),
       drug.defaultDose,
       drug.unit,
       drug.color,

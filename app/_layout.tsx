@@ -61,7 +61,7 @@ function RootNavigator() {
     })
   }, [theme.colors.background])
 
-  // 点击「该注射了」通知 -> 直达登记页，省掉用户在首页再点一次。
+  // 点击通知 -> 直接打开对应的登记页（注射/口服）。
   useEffect(() => {
     if (!lastResponse) return
     const identifier = lastResponse.notification.request.identifier
@@ -70,11 +70,32 @@ function RootNavigator() {
 
     const data: unknown = lastResponse.notification.request.content.data
     if (typeof data !== 'object' || data === null) return
-    const payload = data as { type?: unknown }
+    const payload = data as {
+      type?: unknown
+      kind?: unknown
+      lineId?: unknown
+      plannedAt?: unknown
+    }
     if (payload.type !== 'dose') return
     if (!useAppStore.getState().settings.onboarded_at) return
 
-    router.push('/modal/injection')
+    const lineId = typeof payload.lineId === 'string' ? payload.lineId : undefined
+    if (payload.kind === 'oral') {
+      router.push({
+        pathname: '/modal/oral',
+        params: {
+          ...(lineId ? { lineId } : {}),
+          ...(typeof payload.plannedAt === 'number'
+            ? { scheduledAt: String(payload.plannedAt) }
+            : {}),
+        },
+      })
+      return
+    }
+    router.push({
+      pathname: '/modal/injection',
+      params: lineId ? { lineId } : {},
+    })
   }, [lastResponse])
 
   return (
@@ -109,7 +130,14 @@ export default function RootLayout() {
     initDatabase()
       .then(() => useAppStore.getState().reload())
       .then(() => {
-        if (alive) setState('ready')
+        if (!alive) return
+        setState('ready')
+        // 启动时补一次排程：口服提醒只预排两周，长时间不写数据时需要续上。
+        void import('@/notify/scheduler')
+          .then(({ rescheduleAll }) => rescheduleAll())
+          .catch(() => {
+            // 通知权限/系统限制导致的失败不阻塞启动，用户可在设置里重新保存提醒。
+          })
       })
       .catch((err: unknown) => {
         if (!alive) return

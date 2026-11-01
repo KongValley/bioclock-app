@@ -1,4 +1,4 @@
-import type { InjectionSite, SymptomLog } from '@/types'
+import type { DoseStatus, InjectionSite, MedicationRoute, SymptomLog } from '@/types'
 import { SITE_LABELS } from '@/domain/rotation'
 
 /**
@@ -7,24 +7,51 @@ import { SITE_LABELS } from '@/domain/rotation'
  * 文件是 UTF-8 JSON，结构见 docs/import-format.md：
  * {
  *   "format": "bioclock-import",
- *   "version": 1,
+ *   "version": 2,
+ *   "medications": [...],
  *   "injections": [...],
- *   "symptoms": [...]
+ *   "symptoms": [...],
+ *   "oralLogs": [...]
  * }
  *
+ * v1 仍然接受（v1 没有 medications / oralLogs 段，注射记录也没有 status / lineLabel）。
  * 时间一律写成本地时间字符串（YYYY-MM-DD HH:mm），不写时区，
  * 这样用户从纸质记录抄过来不会有 UTC 偏移的坑。
  */
 
+export interface ImportMedication {
+  name: string
+  genericName: string | null
+  brandNames: string[]
+  route: MedicationRoute
+  defaultDose: number | null
+  unit: string | null
+  catalogKey: string | null
+  extra: Record<string, unknown>
+}
+
 export interface ImportInjection {
   injectedAt: number
-  /** 药名，留空表示使用当前方案的药物 */
+  /** 药名，留空表示使用当前治疗方案的宿主注射线 */
   medicationName: string | null
   dose: number | null
   unit: string | null
   site: InjectionSite
   lotNumber: string | null
   note: string | null
+  status: DoseStatus
+  /** 可选的用药线名称，用来在多条注射线里消歧 */
+  lineLabel: string | null
+}
+
+export interface ImportOralLog {
+  takenAt: number
+  medicationName: string | null
+  status: DoseStatus
+  dose: number | null
+  unit: string | null
+  note: string | null
+  lineLabel: string | null
 }
 
 export interface ImportSymptom {
@@ -34,17 +61,21 @@ export interface ImportSymptom {
   tags: string[]
   temperature: number | null
   note: string | null
-  /** 可选：用同一时刻关联一条注射记录 */
+  /** 可选：用同一时刻关联一条用药记录（dose_log） */
   injectionAt: number | null
 }
 
 export interface ImportPayload {
+  medications: ImportMedication[]
   injections: ImportInjection[]
+  oralLogs: ImportOralLog[]
   symptoms: ImportSymptom[]
 }
 
 export const IMPORT_FORMAT = 'bioclock-import'
-export const IMPORT_VERSION = 1
+export const IMPORT_VERSION = 2
+/** 仍然接受的最老版本 */
+export const IMPORT_MIN_VERSION = 1
 export const IMPORT_MAX_ROWS = 2000
 
 const SITE_ALIASES: Record<string, InjectionSite> = Object.fromEntries(
@@ -53,6 +84,37 @@ const SITE_ALIASES: Record<string, InjectionSite> = Object.fromEntries(
     [SITE_LABELS[site], site],
   ]),
 ) as Record<string, InjectionSite>
+
+const ROUTE_ALIASES: Record<string, MedicationRoute> = {
+  sc: 'sc',
+  皮下: 'sc',
+  皮下注射: 'sc',
+  subcutaneous: 'sc',
+  iv: 'iv',
+  静脉: 'iv',
+  静脉输注: 'iv',
+  输注: 'iv',
+  intravenous: 'iv',
+  oral: 'oral',
+  口服: 'oral',
+  po: 'oral',
+}
+
+const STATUS_ALIASES: Record<string, DoseStatus> = {
+  done: 'done',
+  已用: 'done',
+  已完成: 'done',
+  完成: 'done',
+  已注射: 'done',
+  已服用: 'done',
+  skipped: 'skipped',
+  跳过: 'skipped',
+  取消: 'skipped',
+  missed: 'missed',
+  漏用: 'missed',
+  漏服: 'missed',
+  未用: 'missed',
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -98,6 +160,12 @@ export function parseLocalDateTime(value: unknown, label: string): number {
   return date.getTime()
 }
 
+function requireText(value: unknown, label: string, maxLength = 200): string {
+  const text = optionalText(value, label, maxLength)
+  if (text === null) fail(`${label}不能为空`)
+  return text
+}
+
 function optionalText(value: unknown, label: string, maxLength = 200): string | null {
   if (value === undefined || value === null) return null
   if (typeof value !== 'string') fail(`${label}必须是文本`)
@@ -133,6 +201,22 @@ function parseSite(value: unknown, label: string): InjectionSite {
   return site
 }
 
+function parseRoute(value: unknown, label: string): MedicationRoute {
+  if (value === undefined || value === null || value === '') return 'sc'
+  if (typeof value !== 'string') fail(`${label}必须是文本`)
+  const route = ROUTE_ALIASES[value.trim().toLowerCase()] ?? ROUTE_ALIASES[value.trim()]
+  if (!route) fail(`${label}不认识「${value}」，可选：sc、iv、oral`)
+  return route
+}
+
+function parseStatus(value: unknown, label: string): DoseStatus {
+  if (value === undefined || value === null || value === '') return 'done'
+  if (typeof value !== 'string') fail(`${label}必须是文本`)
+  const status = STATUS_ALIASES[value.trim().toLowerCase()] ?? STATUS_ALIASES[value.trim()]
+  if (!status) fail(`${label}不认识「${value}」，可选：done、skipped、missed`)
+  return status
+}
+
 function parseTags(value: unknown, label: string): string[] {
   if (value === undefined || value === null) return []
   if (!Array.isArray(value)) fail(`${label}必须是数组`)
@@ -148,6 +232,54 @@ function parseTags(value: unknown, label: string): string[] {
     result.push(tag)
   }
   return result
+}
+
+/** 商品名：接受数组，也接受用顿号/逗号分隔的文本。 */
+function parseNameList(value: unknown, label: string): string[] {
+  if (value === undefined || value === null || value === '') return []
+  const raw = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(/[、,，;；/\n]+/)
+      : null
+  if (raw === null) fail(`${label}必须是数组或文本`)
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const item of raw) {
+    if (typeof item !== 'string') fail(`${label}里的每一项都必须是文本`)
+    const name = item.trim()
+    if (name === '') continue
+    if (name.length > 40) fail(`${label}里的单个名称最多 40 个字`)
+    if (seen.has(name)) continue
+    seen.add(name)
+    result.push(name)
+  }
+  return result
+}
+
+function parseExtra(value: unknown, label: string): Record<string, unknown> {
+  if (value === undefined || value === null) return {}
+  if (!isRecord(value)) fail(`${label}必须是对象`)
+  return value
+}
+
+function parseMedication(value: unknown, index: number): ImportMedication {
+  const label = `第 ${index + 1} 条药物`
+  if (!isRecord(value)) fail(`${label}必须是对象`)
+
+  const defaultDose = optionalNumber(value.defaultDose, `${label}的默认剂量`)
+  if (defaultDose !== null && defaultDose < 0) fail(`${label}的默认剂量不能为负数`)
+
+  return {
+    name: requireText(value.name, `${label}的药名`, 40),
+    genericName: optionalText(value.genericName, `${label}的通用名`, 40),
+    brandNames: parseNameList(value.brandNames, `${label}的商品名`),
+    route: parseRoute(value.route, `${label}的给药途径`),
+    defaultDose,
+    unit: optionalText(value.unit, `${label}的单位`, 20),
+    catalogKey: optionalText(value.catalogKey, `${label}的目录标识`, 60),
+    extra: parseExtra(value.extra, `${label}的扩展字段`),
+  }
 }
 
 function parseInjection(value: unknown, index: number): ImportInjection {
@@ -166,6 +298,27 @@ function parseInjection(value: unknown, index: number): ImportInjection {
     site: parseSite(value.site, `${label}的注射部位`),
     lotNumber: optionalText(value.lotNumber, `${label}的批号`, 60),
     note: optionalText(value.note, `${label}的备注`),
+    status: parseStatus(value.status, `${label}的状态`),
+    lineLabel: optionalText(value.lineLabel, `${label}的用药线名称`, 60),
+  }
+}
+
+function parseOralLog(value: unknown, index: number): ImportOralLog {
+  const label = `第 ${index + 1} 条口服打卡`
+  if (!isRecord(value)) fail(`${label}必须是对象`)
+
+  const timeValue = value.takenAt ?? value.loggedAt
+  const dose = optionalNumber(value.dose, `${label}的剂量`)
+  if (dose !== null && dose < 0) fail(`${label}的剂量不能为负数`)
+
+  return {
+    takenAt: parseLocalDateTime(timeValue, `${label}的记录时间`),
+    medicationName: optionalText(value.medication, `${label}的药名`),
+    status: parseStatus(value.status, `${label}的状态`),
+    dose,
+    unit: optionalText(value.unit, `${label}的单位`, 20),
+    note: optionalText(value.note, `${label}的备注`),
+    lineLabel: optionalText(value.lineLabel, `${label}的用药线名称`, 60),
   }
 }
 
@@ -195,16 +348,29 @@ function parseSymptom(value: unknown, index: number): ImportSymptom {
 }
 
 export function parseImportRows(
+  medicationRows: unknown[],
   injectionRows: unknown[],
+  oralLogRows: unknown[],
   symptomRows: unknown[],
 ): ImportPayload {
-  if (injectionRows.length + symptomRows.length === 0) fail('文件里没有任何记录')
-  if (injectionRows.length > IMPORT_MAX_ROWS || symptomRows.length > IMPORT_MAX_ROWS) {
-    fail(`单次最多导入 ${IMPORT_MAX_ROWS} 条记录，请拆分成多个文件`)
+  const total =
+    medicationRows.length + injectionRows.length + oralLogRows.length + symptomRows.length
+  if (total === 0) fail('文件里没有任何记录')
+  for (const [rows, name] of [
+    [medicationRows, '药物'],
+    [injectionRows, '注射记录'],
+    [oralLogRows, '口服打卡'],
+    [symptomRows, '症状记录'],
+  ] as const) {
+    if (rows.length > IMPORT_MAX_ROWS) {
+      fail(`${name}最多 ${IMPORT_MAX_ROWS} 条，请拆分成多个文件`)
+    }
   }
 
   return {
+    medications: medicationRows.map((row, index) => parseMedication(row, index)),
     injections: injectionRows.map((row, index) => parseInjection(row, index)),
+    oralLogs: oralLogRows.map((row, index) => parseOralLog(row, index)),
     symptoms: symptomRows.map((row, index) => parseSymptom(row, index)),
   }
 }
@@ -224,12 +390,19 @@ export function parseImportJson(text: string): ImportPayload {
   if (raw.format !== IMPORT_FORMAT) {
     fail('这不是 BioClock 的导入文件（缺少 format: "bioclock-import"）')
   }
-  if (raw.version !== IMPORT_VERSION) {
-    fail(`不支持的导入文件版本：${String(raw.version)}，当前仅支持版本 ${IMPORT_VERSION}`)
+
+  const version = raw.version
+  if (
+    version !== IMPORT_MIN_VERSION &&
+    version !== IMPORT_VERSION
+  ) {
+    fail(`不支持的导入文件版本：${String(version)}，当前支持版本 ${IMPORT_MIN_VERSION} 和 ${IMPORT_VERSION}`)
   }
 
   return parseImportRows(
+    readArray(raw.medications, 'medications'),
     readArray(raw.injections, 'injections'),
+    readArray(raw.oralLogs, 'oralLogs'),
     readArray(raw.symptoms, 'symptoms'),
   )
 }

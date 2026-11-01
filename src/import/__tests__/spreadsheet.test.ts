@@ -41,6 +41,34 @@ describe('Excel 导入', () => {
     expect(payload.symptoms[0].injectionAt).toBe(payload.injections[1].injectedAt)
   })
 
+  it('读取药物与口服打卡工作表', () => {
+    const wb = workbook({
+      药物: [
+        ['药名', '通用名', '商品名', '给药途径', '默认剂量', '单位', '目录标识'],
+        ['甲氨蝶呤', '甲氨蝶呤', 'MTX、氨甲蝶呤', '口服', 10, 'mg', ''],
+        ['阿达木单抗', '阿达木单抗', '修美乐', '皮下注射', 40, 'mg', 'adalimumab'],
+      ],
+      口服打卡: [
+        ['记录时间', '药物', '状态', '剂量', '单位', '备注'],
+        ['2026-03-02 08:00', '甲氨蝶呤', '已用', 10, 'mg', '早餐后'],
+        ['2026-03-03 08:00', '甲氨蝶呤', '漏用', '', '', ''],
+      ],
+    })
+
+    const payload = parseSpreadsheet(toBytes(wb))
+    expect(payload.medications).toHaveLength(2)
+    expect(payload.medications[0].name).toBe('甲氨蝶呤')
+    expect(payload.medications[0].route).toBe('oral')
+    expect(payload.medications[0].brandNames).toEqual(['MTX', '氨甲蝶呤'])
+    expect(payload.medications[1].route).toBe('sc')
+    expect(payload.medications[1].catalogKey).toBe('adalimumab')
+
+    expect(payload.oralLogs).toHaveLength(2)
+    expect(payload.oralLogs[0].status).toBe('done')
+    expect(payload.oralLogs[1].status).toBe('missed')
+    expect(payload.oralLogs[1].dose).toBeNull()
+  })
+
   it('单表按表头自动识别为症状表', () => {
     const wb = workbook({
       Sheet1: [
@@ -52,6 +80,19 @@ describe('Excel 导入', () => {
     expect(payload.injections).toHaveLength(0)
     expect(payload.symptoms).toHaveLength(1)
     expect(payload.symptoms[0].severity).toBe(3)
+  })
+
+  it('单表按表头自动识别为药物表', () => {
+    const wb = workbook({
+      Sheet1: [
+        ['药名', '通用名', '给药途径', '默认剂量', '单位'],
+        ['甲氨蝶呤', '甲氨蝶呤', '口服', 10, 'mg'],
+      ],
+    })
+    const payload = parseSpreadsheet(toBytes(wb))
+    expect(payload.medications).toHaveLength(1)
+    expect(payload.medications[0].name).toBe('甲氨蝶呤')
+    expect(payload.medications[0].route).toBe('oral')
   })
 
   it('支持 Excel 日期序列号', () => {

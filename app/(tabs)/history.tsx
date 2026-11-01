@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router'
 import { useTheme, type Theme } from '@/ui/theme'
 import { zh } from '@/i18n/zh'
 import { useAppStore, errorMessage } from '@/store/app'
-import type { Injection, MedicationRoute, SymptomLog } from '@/types'
+import type { DoseLog, DoseStatus, MedicationRoute, SymptomLog, TreatmentLine } from '@/types'
 import { ConfirmDialog } from '@/ui/components/ConfirmDialog'
 import { ActionSheet } from '@/ui/components/ActionSheet'
 import { Screen, ScreenHeader } from '@/ui/components/Layout'
@@ -12,14 +12,21 @@ import { SegmentedControl } from '@/ui/components/SegmentedControl'
 import { StateView, LoadingView } from '@/ui/components/StateView'
 import { Fab } from '@/ui/components/Fab'
 import { toast } from '@/ui/components/Toast'
-import { formatDate, formatMonth, formatRelativeDay, formatTime, formatWeekday, monthKey } from '@/ui/components/date'
+import {
+  formatDate,
+  formatMonth,
+  formatRelativeDay,
+  formatTime,
+  formatWeekday,
+  monthKey,
+} from '@/ui/components/date'
 import { SITE_LABELS } from '@/domain/rotation'
 
-type TabKey = 'injection' | 'symptom'
+type TabKey = 'injection' | 'oral' | 'symptom'
 
 type HistoryRow =
   | { kind: 'header'; id: string; title: string }
-  | { kind: 'injection'; id: string; injection: Injection }
+  | { kind: 'dose'; id: string; doseLog: DoseLog; lineKind: 'injection' | 'oral' }
   | { kind: 'symptom'; id: string; symptom: SymptomLog }
 
 interface DeleteTarget {
@@ -37,6 +44,12 @@ const SEVERITY_LABELS: string[] = [
   zh.form.severity5,
 ]
 
+const DOSE_STATUS_LABELS: Record<DoseStatus, string> = {
+  done: '完成',
+  skipped: '跳过',
+  missed: '漏服',
+}
+
 function severityColor(theme: Theme, severity: number): string {
   if (severity <= 1) return theme.colors.success
   if (severity === 2) return theme.colors.primary
@@ -44,27 +57,28 @@ function severityColor(theme: Theme, severity: number): string {
   return theme.colors.danger
 }
 
-function injectionSummary(injection: Injection, medications: Map<string, string>): string {
-  const medication = medications.get(injection.medicationId) ?? zh.common.unknown
-  const dose = injection.dose !== null ? `${injection.dose} ${injection.unit}` : '剂量未记录'
-  return `${medication} · ${dose}`
+/** 用药记录的实际时间：优先打卡时间，其次计划时间。 */
+function logTime(log: DoseLog): number {
+  return log.takenAt ?? log.scheduledAt ?? log.createdAt
 }
 
 export default function HistoryScreen() {
   const theme = useTheme()
   const router = useRouter()
   const ready = useAppStore((state) => state.ready)
-  const injections = useAppStore((state) => state.injections)
-  const regimen = useAppStore((state) => state.regimen)
+  const treatment = useAppStore((state) => state.treatment)
+  const doseLogs = useAppStore((state) => state.doseLogs)
   const symptoms = useAppStore((state) => state.symptoms)
   const medications = useAppStore((state) => state.medications)
   const refreshing = useAppStore((state) => state.refreshing)
   const reload = useAppStore((state) => state.reload)
-  const removeInjection = useAppStore((state) => state.removeInjection)
+  const removeDoseLog = useAppStore((state) => state.removeDoseLog)
   const removeSymptom = useAppStore((state) => state.removeSymptom)
 
   const [tab, setTab] = useState<TabKey>('injection')
-  const [menuTarget, setMenuTarget] = useState<Injection | null>(null)
+  const [doseMenu, setDoseMenu] = useState<{ log: DoseLog; lineKind: 'injection' | 'oral' } | null>(
+    null,
+  )
   const [symptomMenu, setSymptomMenu] = useState<SymptomLog | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null)
   const [deleting, setDeleting] = useState(false)
@@ -81,20 +95,58 @@ export default function HistoryScreen() {
     return map
   }, [medications])
 
-  const injectionRows = useMemo<HistoryRow[]>(() => {
-    const sorted = [...injections].sort((a, b) => b.injectedAt - a.injectedAt)
-    const rows: HistoryRow[] = []
-    let lastMonth = ''
-    for (const injection of sorted) {
-      const month = monthKey(injection.injectedAt)
-      if (month !== lastMonth) {
-        lastMonth = month
-        rows.push({ kind: 'header', id: `month-${month}`, title: formatMonth(injection.injectedAt) })
+  const lineById = useMemo(() => {
+    const map = new Map<string, TreatmentLine>()
+    for (const line of treatment?.lines ?? []) map.set(line.id, line)
+    return map
+  }, [treatment])
+
+  const doseLogById = useMemo(() => {
+    const map = new Map<string, DoseLog>()
+    for (const log of doseLogs) map.set(log.id, log)
+    return map
+  }, [doseLogs])
+
+  const nameOfLine = useCallback(
+    (lineId: string): string => {
+      const line = lineById.get(lineId)
+      if (!line) return zh.common.unknown
+      return medicationNames.get(line.medicationId) ?? line.label ?? zh.common.unknown
+    },
+    [lineById, medicationNames],
+  )
+
+  const routeOfLine = useCallback(
+    (lineId: string): MedicationRoute | undefined => {
+      const line = lineById.get(lineId)
+      return line ? medicationRoutes.get(line.medicationId) : undefined
+    },
+    [lineById, medicationRoutes],
+  )
+
+  const doseRows = useCallback(
+    (lineKind: 'injection' | 'oral'): HistoryRow[] => {
+      const sorted = doseLogs
+        .filter((log) => lineById.get(log.lineId)?.kind === lineKind)
+        .sort((a, b) => logTime(b) - logTime(a))
+      const rows: HistoryRow[] = []
+      let lastMonth = ''
+      for (const log of sorted) {
+        const at = logTime(log)
+        const month = monthKey(at)
+        if (month !== lastMonth) {
+          lastMonth = month
+          rows.push({ kind: 'header', id: `month-${month}`, title: formatMonth(at) })
+        }
+        rows.push({ kind: 'dose', id: log.id, doseLog: log, lineKind })
       }
-      rows.push({ kind: 'injection', id: injection.id, injection })
-    }
-    return rows
-  }, [injections])
+      return rows
+    },
+    [doseLogs, lineById],
+  )
+
+  const injectionRows = useMemo(() => doseRows('injection'), [doseRows])
+  const oralRows = useMemo(() => doseRows('oral'), [doseRows])
 
   const symptomRows = useMemo<HistoryRow[]>(() => {
     return [...symptoms]
@@ -108,12 +160,10 @@ export default function HistoryScreen() {
     })
   }, [reload])
 
-  const openNewInjection = () => {
-    if (regimen) {
-      router.push('/modal/injection')
-    } else {
-      router.push('/onboarding')
-    }
+  const openNew = (target: TabKey) => {
+    if (target === 'injection') router.push('/modal/injection')
+    else if (target === 'oral') router.push('/modal/oral')
+    else router.push('/modal/symptom')
   }
 
   const confirmDelete = async () => {
@@ -121,9 +171,9 @@ export default function HistoryScreen() {
     setDeleting(true)
     try {
       const result =
-        deleteTarget.kind === 'injection'
-          ? await removeInjection(deleteTarget.id)
-          : await removeSymptom(deleteTarget.id)
+        deleteTarget.kind === 'symptom'
+          ? await removeSymptom(deleteTarget.id)
+          : await removeDoseLog(deleteTarget.id)
       setDeleteTarget(null)
       toast('已删除', 'success')
       if (result.notifyWarning) toast(result.notifyWarning, 'error')
@@ -134,94 +184,97 @@ export default function HistoryScreen() {
     }
   }
 
-  const renderInjection = (injection: Injection) => (
-    <View
-      style={{
-        backgroundColor: theme.colors.surface,
-        borderRadius: theme.radius.md,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: theme.colors.border,
-        padding: theme.spacing.md,
-        flexDirection: 'row',
-        alignItems: 'flex-start',
-        gap: theme.spacing.sm,
-      }}
-    >
-      <View style={{ width: 58 }}>
-        <Text
-          style={{
-            color: theme.colors.text,
-            fontSize: theme.fontSize.lg,
-            fontWeight: '700',
-          }}
-        >
-          {new Date(injection.injectedAt).getDate()} 日
-        </Text>
-        <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.xs }}>
-          {formatWeekday(injection.injectedAt)} {formatTime(injection.injectedAt)}
-        </Text>
-      </View>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`${injectionSummary(injection, medicationNames)}，长按编辑或删除`}
-        accessibilityHint="长按打开编辑与删除操作"
-        onLongPress={() => setMenuTarget(injection)}
-        delayLongPress={350}
-        style={{ flex: 1, minHeight: 44, justifyContent: 'center' }}
+  const renderDose = (log: DoseLog, lineKind: 'injection' | 'oral') => {
+    const at = logTime(log)
+    const name = nameOfLine(log.lineId)
+    const doseText = log.dose !== null ? `${log.dose} ${log.unit}`.trim() : '剂量未记录'
+    const summary = lineKind === 'injection' ? `${name} · ${doseText}` : name
+
+    return (
+      <View
+        style={{
+          backgroundColor: theme.colors.surface,
+          borderRadius: theme.radius.md,
+          borderWidth: StyleSheet.hairlineWidth,
+          borderColor: theme.colors.border,
+          padding: theme.spacing.md,
+          flexDirection: 'row',
+          alignItems: 'flex-start',
+          gap: theme.spacing.sm,
+        }}
       >
-        <Text
-          style={{
-            color: theme.colors.text,
-            fontSize: theme.fontSize.md,
-            fontWeight: '600',
-          }}
-        >
-          {injectionSummary(injection, medicationNames)}
-        </Text>
-        <Text
-          style={{
-            color: theme.colors.textSecondary,
-            fontSize: theme.fontSize.sm,
-            marginTop: 2,
-          }}
-        >
-          {medicationRoutes.get(injection.medicationId) === 'iv'
-            ? '医院输注'
-            : SITE_LABELS[injection.site]}
-          {injection.lotNumber ? ` · 批号 ${injection.lotNumber}` : ''}
-        </Text>
-        {injection.note ? (
+        <View style={{ width: 58 }}>
           <Text
-            numberOfLines={2}
             style={{
-              color: theme.colors.textTertiary,
-              fontSize: theme.fontSize.xs,
-              marginTop: 2,
+              color: theme.colors.text,
+              fontSize: theme.fontSize.lg,
+              fontWeight: '700',
             }}
           >
-            {injection.note}
+            {new Date(at).getDate()} 日
           </Text>
-        ) : null}
-      </Pressable>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="注射记录操作"
-        onPress={() => setMenuTarget(injection)}
-        style={({ pressed }) => [
-          styles.menuButton,
-          { opacity: pressed ? 0.5 : 1, borderRadius: theme.radius.sm },
-        ]}
-      >
-        <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.lg }}>⋯</Text>
-      </Pressable>
-    </View>
-  )
+          <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.xs }}>
+            {formatWeekday(at)} {formatTime(at)}
+          </Text>
+        </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${summary}，长按编辑或删除`}
+          accessibilityHint="长按打开操作菜单"
+          onLongPress={() => setDoseMenu({ log, lineKind })}
+          delayLongPress={350}
+          style={{ flex: 1, minHeight: 44, justifyContent: 'center' }}
+        >
+          <Text
+            style={{
+              color: theme.colors.text,
+              fontSize: theme.fontSize.md,
+              fontWeight: '600',
+            }}
+          >
+            {summary}
+          </Text>
+          <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm, marginTop: 2 }}>
+            {lineKind === 'injection'
+              ? [
+                  log.site
+                    ? SITE_LABELS[log.site]
+                    : routeOfLine(log.lineId) === 'iv'
+                      ? '医院输注'
+                      : null,
+                  log.lotNumber ? `批号 ${log.lotNumber}` : null,
+                ]
+                  .filter(Boolean)
+                  .join(' · ') || '注射'
+              : `${DOSE_STATUS_LABELS[log.status]} · ${doseText}`}
+          </Text>
+          {log.note ? (
+            <Text
+              numberOfLines={2}
+              style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.xs, marginTop: 2 }}
+            >
+              {log.note}
+            </Text>
+          ) : null}
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="用药记录操作"
+          onPress={() => setDoseMenu({ log, lineKind })}
+          style={({ pressed }) => [
+            styles.menuButton,
+            { opacity: pressed ? 0.5 : 1, borderRadius: theme.radius.sm },
+          ]}
+        >
+          <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.lg }}>⋯</Text>
+        </Pressable>
+      </View>
+    )
+  }
 
   const renderSymptom = (symptom: SymptomLog) => {
     const color = severityColor(theme, symptom.severity)
-    const related = symptom.injectionId
-      ? injections.find((item) => item.id === symptom.injectionId)
-      : undefined
+    const related = symptom.injectionId ? doseLogById.get(symptom.injectionId) : undefined
     return (
       <View
         style={{
@@ -294,12 +347,18 @@ export default function HistoryScreen() {
           ) : null}
           {related ? (
             <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.xs }}>
-              关联注射 {formatDate(related.injectedAt)}
+              关联注射 {formatDate(logTime(related))} · {nameOfLine(related.lineId)}
             </Text>
           ) : null}
         </View>
         {symptom.note ? (
-          <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm, lineHeight: theme.lineHeight.md }}>
+          <Text
+            style={{
+              color: theme.colors.textSecondary,
+              fontSize: theme.fontSize.sm,
+              lineHeight: theme.lineHeight.md,
+            }}
+          >
             {symptom.note}
           </Text>
         ) : null}
@@ -324,7 +383,7 @@ export default function HistoryScreen() {
         </Text>
       )
     }
-    if (row.kind === 'injection') return renderInjection(row.injection)
+    if (row.kind === 'dose') return renderDose(row.doseLog, row.lineKind)
     return renderSymptom(row.symptom)
   }
 
@@ -336,22 +395,46 @@ export default function HistoryScreen() {
     )
   }
 
-  const data = tab === 'injection' ? injectionRows : symptomRows
+  const data =
+    tab === 'injection' ? injectionRows : tab === 'oral' ? oralRows : symptomRows
+
+  const subtitle =
+    tab === 'injection'
+      ? `共 ${injectionRows.filter((row) => row.kind === 'dose').length} 条注射记录`
+      : tab === 'oral'
+        ? `共 ${oralRows.filter((row) => row.kind === 'dose').length} 条口服打卡`
+        : `共 ${symptoms.length} 条症状记录`
+
+  const emptyConfig =
+    tab === 'injection'
+      ? {
+          icon: 'syringe' as const,
+          title: zh.empty.historyNoInjection,
+          message: '登记后，这里会按月展示你的注射时间线。',
+          actionLabel: zh.history.addInjection,
+        }
+      : tab === 'oral'
+        ? {
+            icon: 'smile' as const,
+            title: '暂无口服打卡',
+            message: '在「今天」或这里记录口服用药的完成情况。',
+            actionLabel: '新增口服打卡',
+          }
+        : {
+            icon: 'smile' as const,
+            title: zh.empty.historyNoSymptom,
+            message: '记录注射后出现的症状，方便复诊时回顾。',
+            actionLabel: zh.history.addSymptom,
+          }
 
   return (
     <Screen>
-      <ScreenHeader
-        title={zh.history.title}
-        subtitle={
-          tab === 'injection'
-            ? `共 ${injections.length} 条注射记录`
-            : `共 ${symptoms.length} 条症状记录`
-        }
-      />
+      <ScreenHeader title={zh.history.title} subtitle={subtitle} />
       <View style={{ paddingHorizontal: theme.spacing.lg, paddingBottom: theme.spacing.sm }}>
         <SegmentedControl<TabKey>
           options={[
             { value: 'injection', label: zh.history.injectionTab },
+            { value: 'oral', label: '口服' },
             { value: 'symptom', label: zh.history.symptomTab },
           ]}
           value={tab}
@@ -374,27 +457,11 @@ export default function HistoryScreen() {
         onRefresh={refresh}
         ListEmptyComponent={
           <StateView
-            icon={tab === 'injection' ? 'syringe' : 'smile'}
-            title={tab === 'injection' ? zh.empty.historyNoInjection : zh.empty.historyNoSymptom}
-            message={
-              tab === 'injection'
-                ? '登记后，这里会按月展示你的注射时间线。'
-                : '记录注射后出现的症状，方便复诊时回顾。'
-            }
-            actionLabel={
-              tab === 'injection'
-                ? regimen
-                  ? zh.history.addInjection
-                  : '去设置方案'
-                : zh.history.addSymptom
-            }
-            onAction={() => {
-              if (tab === 'injection') {
-                openNewInjection()
-              } else {
-                router.push('/modal/symptom')
-              }
-            }}
+            icon={emptyConfig.icon}
+            title={emptyConfig.title}
+            message={emptyConfig.message}
+            actionLabel={emptyConfig.actionLabel}
+            onAction={() => openNew(tab)}
           />
         }
       />
@@ -402,57 +469,73 @@ export default function HistoryScreen() {
       <Fab
         label={
           tab === 'injection'
-            ? regimen
-              ? zh.history.addInjection
-              : '去设置方案'
-            : zh.history.addSymptom
+            ? zh.history.addInjection
+            : tab === 'oral'
+              ? '新增口服打卡'
+              : zh.history.addSymptom
         }
-        onPress={() => {
-          if (tab === 'injection') {
-            openNewInjection()
-          } else {
-            router.push('/modal/symptom')
-          }
-        }}
-        accessibilityLabel={tab === 'injection' ? '新增注射记录' : '新增症状记录'}
+        onPress={() => openNew(tab)}
+        accessibilityLabel={
+          tab === 'injection'
+            ? '新增注射记录'
+            : tab === 'oral'
+              ? '新增口服打卡'
+              : '新增症状记录'
+        }
       />
 
       <ActionSheet
-        visible={menuTarget !== null}
+        visible={doseMenu !== null}
         title={
-          menuTarget
-            ? `${formatDate(menuTarget.injectedAt)} · ${injectionSummary(menuTarget, medicationNames)}`
+          doseMenu
+            ? `${formatDate(logTime(doseMenu.log))} · ${nameOfLine(doseMenu.log.lineId)}`
             : undefined
         }
-        actions={[
-          {
-            label: zh.common.edit,
-            onPress: () => {
-              const target = menuTarget
-              setMenuTarget(null)
-              if (target) {
-                router.push({ pathname: '/modal/injection', params: { id: target.id } })
-              }
-            },
-          },
-          {
-            label: zh.common.delete,
-            destructive: true,
-            onPress: () => {
-              const target = menuTarget
-              setMenuTarget(null)
-              if (target) {
-                setDeleteTarget({
-                  kind: 'injection',
-                  id: target.id,
-                  title: zh.history.deleteInjectionTitle,
-                  message: zh.history.deleteInjectionMessage,
-                })
-              }
-            },
-          },
-        ]}
-        onClose={() => setMenuTarget(null)}
+        actions={
+          doseMenu && doseMenu.lineKind === 'injection'
+            ? [
+                {
+                  label: zh.common.edit,
+                  onPress: () => {
+                    const target = doseMenu.log
+                    setDoseMenu(null)
+                    router.push({ pathname: '/modal/injection', params: { id: target.id } })
+                  },
+                },
+                {
+                  label: zh.common.delete,
+                  destructive: true,
+                  onPress: () => {
+                    const target = doseMenu.log
+                    setDoseMenu(null)
+                    setDeleteTarget({
+                      kind: 'injection',
+                      id: target.id,
+                      title: zh.history.deleteInjectionTitle,
+                      message: zh.history.deleteInjectionMessage,
+                    })
+                  },
+                },
+              ]
+            : [
+                {
+                  label: zh.common.delete,
+                  destructive: true,
+                  onPress: () => {
+                    if (!doseMenu) return
+                    const target = doseMenu.log
+                    setDoseMenu(null)
+                    setDeleteTarget({
+                      kind: 'oral',
+                      id: target.id,
+                      title: '删除这条口服打卡？',
+                      message: '删除后该次打卡会从时间线里移除，此操作不可恢复。',
+                    })
+                  },
+                },
+              ]
+        }
+        onClose={() => setDoseMenu(null)}
       />
 
       <ActionSheet

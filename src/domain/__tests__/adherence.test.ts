@@ -1,121 +1,240 @@
 import { describe, expect, it } from 'vitest'
-import type { Injection, InjectionSite, Regimen } from '@/types'
 import { computeAdherence } from '../adherence'
+import type { InjectionLineAdherence, OralLineAdherence } from '../adherence'
+import { DAY, T0, injectionLog, makeInjectionLine, makeLog, makeOralLine } from './fixtures'
 
-const DAY = 86_400_000
-const T0 = Date.UTC(2026, 0, 1, 9, 0, 0)
-
-let injectionSeq = 0
-
-function makeInjection(offsetDays: number, site: InjectionSite = 'abdomen_ul'): Injection {
-  injectionSeq += 1
-  const injectedAt = T0 + offsetDays * DAY
-  return {
-    id: `inj-${injectionSeq}`,
-    regimenId: 'regimen-1',
-    medicationId: 'med-1',
-    injectedAt,
-    dose: 40,
-    unit: 'mg',
-    site,
-    lotNumber: null,
-    note: null,
-    createdAt: injectedAt,
-    updatedAt: injectedAt,
-  }
+function injectionStatsOf(
+  stats: ReturnType<typeof computeAdherence>,
+  lineId: string,
+): InjectionLineAdherence {
+  const line = stats.byLine.find((item) => item.lineId === lineId)
+  if (!line || line.kind !== 'injection') throw new Error(`缺少注射线统计：${lineId}`)
+  return line
 }
 
-function maintenanceRegimen(anchor: Regimen['anchor'] = 'planned'): Regimen {
-  return {
-    id: 'regimen-1',
-    medicationId: 'med-1',
-    name: '测试方案',
-    anchor,
-    windowDays: 2,
-    isActive: true,
-    createdAt: T0,
-    phases: [
-      {
-        id: 'phase-0',
-        regimenId: 'regimen-1',
-        orderIdx: 0,
-        kind: 'maintenance',
-        intervalDays: 14,
-        repeatCount: 0,
-        dose: 40,
-        unit: 'mg',
-      },
-    ],
-  }
+function oralStatsOf(
+  stats: ReturnType<typeof computeAdherence>,
+  lineId: string,
+): OralLineAdherence {
+  const line = stats.byLine.find((item) => item.lineId === lineId)
+  if (!line || line.kind !== 'oral') throw new Error(`缺少口服线统计：${lineId}`)
+  return line
 }
 
-describe('computeAdherence', () => {
-  it('无注射记录时全部为 0', () => {
-    expect(
-      computeAdherence([], maintenanceRegimen(), T0 + 10 * DAY),
-    ).toEqual({
+function maintenancePlanned() {
+  return makeInjectionLine({ id: 'line-host', isHost: true, anchor: 'planned', windowDays: 2 })
+}
+
+describe('computeAdherence（注射线）', () => {
+  it('无记录时各项为 0', () => {
+    const stats = computeAdherence([maintenancePlanned()], [], T0)
+
+    expect(stats.total).toBe(0)
+    expect(stats.onTime).toBe(0)
+    expect(stats.early).toBe(0)
+    expect(stats.late).toBe(0)
+    expect(stats.missed).toBe(0)
+    expect(stats.avgDeviationDays).toBe(0)
+    expect(stats.currentStreak).toBe(0)
+    expect(stats.rate).toBe(0)
+    expect(stats.byLine).toHaveLength(1)
+  })
+
+  it('无任何线时返回全 0 且 byLine 为空', () => {
+    expect(computeAdherence([], [], T0)).toEqual({
       total: 0,
       onTime: 0,
       early: 0,
       late: 0,
+      missed: 0,
+      upcoming: 0,
       avgDeviationDays: 0,
       currentStreak: 0,
+      rate: 0,
+      byLine: [],
     })
   })
 
-  it('正确统计按时 / 提前 / 延迟、平均偏差与当前连续按时次数', () => {
-    // 计划日：0 / 14 / 28 / 42（planned 锚点，不随迟到顺延）
-    const injections = [
-      makeInjection(0),
-      makeInjection(15), // +1 天，窗口 ±2 → 按时
-      makeInjection(33), // 计划 28，+5 天 → 延迟
-      makeInjection(43), // 计划 42，+1 天 → 按时
-    ]
+  it('统计按时 / 提前 / 延迟、平均偏差与连续按时次数', () => {
+    // planned 锚点 → 计划日 0 / 14 / 28 / 42
+    const logs = [injectionLog(0), injectionLog(15), injectionLog(33), injectionLog(43)]
 
-    const stats = computeAdherence(injections, maintenanceRegimen('planned'), T0 + 50 * DAY)
+    const stats = computeAdherence([maintenancePlanned()], logs, T0 + 50 * DAY)
+    const line = injectionStatsOf(stats, 'line-host')
 
-    expect(stats.total).toBe(4)
-    expect(stats.onTime).toBe(3)
-    expect(stats.early).toBe(0)
-    expect(stats.late).toBe(1)
+    expect(line.kind).toBe('injection')
+    expect(line.total).toBe(4)
+    expect(line.onTime).toBe(3)
+    expect(line.early).toBe(0)
+    expect(line.late).toBe(1)
     // (0 + 1 + 5 + 1) / 4 = 1.75 → 1.8
-    expect(stats.avgDeviationDays).toBe(1.8)
-    // 最近一次按时，再往前一次延迟 → 连续 1 次
-    expect(stats.currentStreak).toBe(1)
+    expect(line.avgDeviationDays).toBe(1.8)
+    expect(line.currentStreak).toBe(1)
   })
 
-  it('连续按时时 currentStreak 从最近一次往前累计', () => {
-    const injections = [makeInjection(0), makeInjection(14), makeInjection(28)]
-    const stats = computeAdherence(injections, maintenanceRegimen('planned'), T0 + 30 * DAY)
+  it('连续按时从最近一次往前累计', () => {
+    const logs = [injectionLog(0), injectionLog(14), injectionLog(28)]
+    const stats = computeAdherence([maintenancePlanned()], logs, T0 + 30 * DAY)
 
-    expect(stats.total).toBe(3)
-    expect(stats.onTime).toBe(3)
+    expect(injectionStatsOf(stats, 'line-host').currentStreak).toBe(3)
     expect(stats.currentStreak).toBe(3)
-    expect(stats.avgDeviationDays).toBe(0)
   })
 
   it('最近一次提前会中断连续按时，并计入 early 与负偏差', () => {
-    const injections = [makeInjection(0), makeInjection(10)]
-    const stats = computeAdherence(injections, maintenanceRegimen('planned'), T0 + 10 * DAY)
+    const logs = [injectionLog(0), injectionLog(10)]
+    const stats = computeAdherence([maintenancePlanned()], logs, T0 + 10 * DAY)
+    const line = injectionStatsOf(stats, 'line-host')
 
-    expect(stats.total).toBe(2)
-    expect(stats.onTime).toBe(1)
-    expect(stats.early).toBe(1)
-    expect(stats.late).toBe(0)
-    expect(stats.avgDeviationDays).toBe(-2)
-    expect(stats.currentStreak).toBe(0)
+    expect(line.total).toBe(2)
+    expect(line.onTime).toBe(1)
+    expect(line.early).toBe(1)
+    expect(line.late).toBe(0)
+    expect(line.avgDeviationDays).toBe(-2)
+    expect(line.currentStreak).toBe(0)
   })
 
-  it('统计口径之和等于已完成注射数', () => {
-    const injections = [
-      makeInjection(0),
-      makeInjection(17),
-      makeInjection(29),
-      makeInjection(45),
-    ]
-    const stats = computeAdherence(injections, maintenanceRegimen('planned'), T0 + 60 * DAY)
+  it('逾期未登记的针计入 missed，不拉低平均偏差', () => {
+    const logs = [injectionLog(0)]
+    const stats = computeAdherence([maintenancePlanned()], logs, T0 + 40 * DAY)
+    const line = injectionStatsOf(stats, 'line-host')
 
-    expect(stats.total).toBe(injections.length)
-    expect(stats.onTime + stats.early + stats.late).toBe(stats.total)
+    expect(line.total).toBe(1)
+    expect(line.avgDeviationDays).toBe(0)
+    expect(line.missed).toBe(2) // 第 14、28 天
+    expect(line.upcoming).toBe(2) // 第 42、56 天
+    expect(stats.rate).toBe(0.33) // 1 / (1 + 2)
+  })
+
+  it('多条注射线分别统计', () => {
+    const host = makeInjectionLine({
+      id: 'line-host',
+      isHost: true,
+      anchor: 'planned',
+      phases: [
+        {
+          id: 'host-p0',
+          lineId: 'line-host',
+          orderIdx: 0,
+          kind: 'maintenance',
+          intervalDays: 14,
+          repeatCount: 0,
+          dose: 40,
+          unit: 'mg',
+        },
+      ],
+    })
+    const staggered = makeInjectionLine({
+      id: 'line-staggered',
+      isHost: false,
+      anchor: 'planned',
+      phases: [
+        {
+          id: 'staggered-p0',
+          lineId: 'line-staggered',
+          orderIdx: 0,
+          kind: 'maintenance',
+          intervalDays: 7,
+          repeatCount: 0,
+          dose: 25,
+          unit: 'mg',
+        },
+      ],
+    })
+
+    const stats = computeAdherence(
+      [host, staggered],
+      [
+        injectionLog(0, 'line-host'),
+        injectionLog(0, 'line-staggered'),
+        injectionLog(9, 'line-staggered'),
+      ],
+      T0 + 9 * DAY,
+    )
+
+    expect(stats.byLine).toHaveLength(2)
+    expect(injectionStatsOf(stats, 'line-host').total).toBe(1)
+    expect(injectionStatsOf(stats, 'line-host').avgDeviationDays).toBe(0)
+    // 错开线第 2 针计划第 7 天、实际第 9 天 → 偏差 2，窗口 ±2 内按时
+    expect(injectionStatsOf(stats, 'line-staggered').total).toBe(2)
+    expect(injectionStatsOf(stats, 'line-staggered').onTime).toBe(2)
+    expect(injectionStatsOf(stats, 'line-staggered').avgDeviationDays).toBe(1)
+    expect(stats.total).toBe(3)
+    // 汇总偏差按原始值累加：(0 + 0 + 2) / 3 = 0.67 → 保留一位小数 0.7
+    expect(stats.avgDeviationDays).toBe(0.7)
+    expect(stats.onTime).toBe(3)
+  })
+})
+
+describe('computeAdherence（口服线，含漏服）', () => {
+  it('按打卡点算完成 / 漏服 / 完成率', () => {
+    const oral = makeOralLine({ id: 'line-oral', frequency: 'daily', startDate: T0 })
+    const logs = [
+      makeLog({ lineId: 'line-oral', scheduledAt: T0, takenAt: T0 }),
+      makeLog({ lineId: 'line-oral', scheduledAt: T0 + DAY, takenAt: null, status: 'skipped' }),
+      makeLog({ lineId: 'line-oral', scheduledAt: T0 + 2 * DAY, takenAt: T0 + 2 * DAY }),
+    ]
+
+    const stats = computeAdherence([oral], logs, T0 + 5 * DAY)
+    const line = oralStatsOf(stats, 'line-oral')
+
+    expect(line.kind).toBe('oral')
+    expect(line.total).toBe(2)
+    expect(line.missed).toBe(2) // 第 1 天爽约 + 第 3 天到点未打卡
+    expect(line.rate).toBe(0.5) // 2 / (2 + 2)
+  })
+
+  it('全部按时打卡时完成率为 1', () => {
+    const oral = makeOralLine({ id: 'line-oral', frequency: 'daily', startDate: T0 })
+    const logs = [
+      makeLog({ lineId: 'line-oral', scheduledAt: T0, takenAt: T0 }),
+      makeLog({ lineId: 'line-oral', scheduledAt: T0 + DAY, takenAt: T0 + DAY }),
+    ]
+
+    const stats = computeAdherence([oral], logs, T0 + DAY)
+    const line = oralStatsOf(stats, 'line-oral')
+
+    expect(line.total).toBe(2)
+    expect(line.missed).toBe(0)
+    expect(line.rate).toBe(1)
+  })
+
+  it('weekly 频次只统计指定周几的打卡点', () => {
+    const oral = makeOralLine({
+      id: 'line-oral',
+      frequency: 'weekly',
+      timesPerPeriod: 2,
+      daysOfWeek: [1, 4],
+      startDate: T0,
+    })
+    const logs = [
+      makeLog({ lineId: 'line-oral', scheduledAt: T0, takenAt: T0 }),
+      makeLog({ lineId: 'line-oral', scheduledAt: T0 + 3 * DAY, takenAt: null, status: 'skipped' }),
+    ]
+
+    const stats = computeAdherence([oral], logs, T0 + 6 * DAY)
+    const line = oralStatsOf(stats, 'line-oral')
+
+    expect(line.total).toBe(1)
+    expect(line.missed).toBe(1)
+    expect(line.rate).toBe(0.5)
+  })
+
+  it('汇总口径同时包含注射线与口服线', () => {
+    const host = maintenancePlanned()
+    const oral = makeOralLine({ id: 'line-oral', frequency: 'daily', startDate: T0 })
+
+    const stats = computeAdherence(
+      [host, oral],
+      [
+        injectionLog(0, 'line-host'),
+        makeLog({ lineId: 'line-oral', scheduledAt: T0, takenAt: T0 }),
+      ],
+      T0,
+    )
+
+    expect(stats.total).toBe(2)
+    expect(stats.byLine.map((line) => line.kind)).toEqual(['injection', 'oral'])
+    expect(stats.missed).toBe(0)
+    expect(stats.rate).toBe(1)
   })
 })

@@ -2,6 +2,8 @@ import * as Sharing from 'expo-sharing'
 
 export { exportCsv } from './csv'
 export { exportPdf } from './pdf'
+export { exportJson } from './json'
+export { exportExcel } from './excel'
 
 /** 调起系统分享面板。设备不支持时抛中文错误，由 UI 层提示。 */
 export async function shareFile(path: string): Promise<void> {
@@ -15,7 +17,11 @@ export async function shareFile(path: string): Promise<void> {
     ? 'text/csv'
     : lowerPath.endsWith('.pdf')
       ? 'application/pdf'
-      : undefined
+      : lowerPath.endsWith('.json')
+        ? 'application/json'
+        : lowerPath.endsWith('.xlsx')
+          ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+          : undefined
 
   await Sharing.shareAsync(path, {
     dialogTitle: '分享用药记录',

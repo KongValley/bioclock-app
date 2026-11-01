@@ -1,6 +1,25 @@
 {
   "format": "bioclock-import",
-  "version": 1,
+  "version": 2,
+  "medications": [
+    {
+      "name": "甲氨蝶呤",
+      "genericName": "甲氨蝶呤",
+      "brandNames": ["MTX"],
+      "route": "oral",
+      "defaultDose": 10,
+      "unit": "mg"
+    },
+    {
+      "name": "阿达木单抗",
+      "genericName": "阿达木单抗",
+      "brandNames": ["修美乐", "格乐立"],
+      "route": "sc",
+      "defaultDose": 40,
+      "unit": "mg",
+      "catalogKey": "adalimumab"
+    }
+  ],
   "injections": [
     {
       "injectedAt": "2026-03-15 09:00",
@@ -17,6 +36,22 @@
       "dose": 40,
       "unit": "mg",
       "site": "thigh_l"
+    }
+  ],
+  "oralLogs": [
+    {
+      "takenAt": "2026-03-16 08:30",
+      "medication": "甲氨蝶呤",
+      "status": "done",
+      "dose": 10,
+      "unit": "mg",
+      "note": "早饭后"
+    },
+    {
+      "takenAt": "2026-03-23 21:10",
+      "medication": "甲氨蝶呤",
+      "status": "skipped",
+      "note": "当天忘记带药"
     }
   ],
   "symptoms": [

@@ -43,7 +43,8 @@ export default function SymptomModal() {
 
   const ready = useAppStore((state) => state.ready)
   const medications = useAppStore((state) => state.medications)
-  const injections = useAppStore((state) => state.injections)
+  const treatment = useAppStore((state) => state.treatment)
+  const doseLogs = useAppStore((state) => state.doseLogs)
   const symptoms = useAppStore((state) => state.symptoms)
   const symptomTags = useAppStore((state) => state.symptomTags)
   const appLockEnabled = useAppStore((state) => state.settings.app_lock === '1')
@@ -93,9 +94,26 @@ export default function SymptomModal() {
     return map
   }, [medications])
 
+  // 注射线：lineId → 药物 id；只有这些线上的 dose_log 才能作为「关联注射」。
+  const injectionLines = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const line of treatment?.lines ?? []) {
+      if (line.kind === 'injection') map.set(line.id, line.medicationId)
+    }
+    return map
+  }, [treatment])
+
   const recentInjections = useMemo(() => {
-    return [...injections].sort((a, b) => b.injectedAt - a.injectedAt).slice(0, 5)
-  }, [injections])
+    return doseLogs
+      .filter((log) => injectionLines.has(log.lineId))
+      .map((log) => ({
+        log,
+        at: log.takenAt ?? log.scheduledAt ?? log.createdAt,
+        medicationId: injectionLines.get(log.lineId) ?? null,
+      }))
+      .sort((a, b) => b.at - a.at)
+      .slice(0, 5)
+  }, [doseLogs, injectionLines])
 
   const close = () => {
     if (router.canGoBack()) {
@@ -433,14 +451,14 @@ export default function SymptomModal() {
                       </Text>
                     </Pressable>
                     {recentInjections.map((injection) => {
-                      const selected = injectionId === injection.id
+                      const selected = injectionId === injection.log.id
                       return (
                         <Pressable
-                          key={injection.id}
+                          key={injection.log.id}
                           accessibilityRole="button"
-                          accessibilityLabel={`关联 ${formatDate(injection.injectedAt)} 的注射`}
+                          accessibilityLabel={`关联 ${formatDate(injection.at)} 的注射`}
                           accessibilityState={{ selected }}
-                          onPress={() => setInjectionId(selected ? null : injection.id)}
+                          onPress={() => setInjectionId(selected ? null : injection.log.id)}
                           style={({ pressed }) => [
                             styles.tag,
                             {
@@ -459,8 +477,10 @@ export default function SymptomModal() {
                               fontSize: theme.fontSize.sm,
                             }}
                           >
-                            {formatDate(injection.injectedAt)} ·{' '}
-                            {medicationNames.get(injection.medicationId) ?? zh.common.unknown}
+                            {formatDate(injection.at)} ·{' '}
+                            {injection.medicationId
+                              ? medicationNames.get(injection.medicationId) ?? zh.common.unknown
+                              : zh.common.unknown}
                           </Text>
                         </Pressable>
                       )

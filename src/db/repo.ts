@@ -2,17 +2,22 @@ import * as Crypto from 'expo-crypto'
 import type { SQLiteDatabase } from 'expo-sqlite'
 import type {
   AppSettings,
-  Injection,
+  DoseLog,
+  DoseStatus,
   InjectionSite,
+  LineKind,
   Medication,
   MedicationRoute,
+  OralFrequency,
+  OralPlan,
   PhaseKind,
-  Regimen,
   RegimenAnchor,
-  RegimenPhase,
-  ReminderRule,
+  ReminderRuleV5,
   SymptomLog,
   SymptomTag,
+  Treatment,
+  TreatmentLine,
+  TreatmentPhase,
 } from '@/types'
 import { getDatabase } from './index'
 
@@ -31,6 +36,7 @@ interface MedicationRow {
   id: string
   name: string
   generic_name: string | null
+  brand_names: string
   default_dose: number | null
   unit: string
   color: string
@@ -38,22 +44,38 @@ interface MedicationRow {
   disease_ids: string
   catalog_key: string | null
   is_builtin: number
+  extra: string
   created_at: number
 }
 
-interface RegimenRow {
+interface TreatmentRow {
   id: string
-  medication_id: string
   name: string
-  anchor: RegimenAnchor
-  window_days: number
   is_active: number
   created_at: number
 }
 
-interface RegimenPhaseRow {
+interface TreatmentLineRow {
   id: string
-  regimen_id: string
+  treatment_id: string
+  medication_id: string
+  kind: LineKind
+  label: string
+  is_host: number
+  sync_with_host: number
+  anchor: RegimenAnchor
+  window_days: number
+  oral_start: number | null
+  oral_duration_days: number | null
+  oral_frequency: OralFrequency | null
+  oral_times_per_period: number | null
+  oral_days_of_week: string | null
+  oral_remind_time: string | null
+}
+
+interface TreatmentPhaseRow {
+  id: string
+  line_id: string
   order_idx: number
   kind: PhaseKind
   interval_days: number
@@ -62,14 +84,15 @@ interface RegimenPhaseRow {
   unit: string
 }
 
-interface InjectionRow {
+interface DoseLogRow {
   id: string
-  regimen_id: string
-  medication_id: string
-  injected_at: number
+  line_id: string
+  scheduled_at: number | null
+  taken_at: number | null
+  status: DoseStatus
   dose: number | null
-  unit: string
-  site: InjectionSite
+  unit: string | null
+  site: InjectionSite | null
   lot_number: string | null
   note: string | null
   created_at: number
@@ -84,7 +107,7 @@ interface SymptomLogRow {
   tags: string
   note: string | null
   temperature: number | null
-  injection_id: string | null
+  dose_log_id: string | null
 }
 
 interface SymptomTagRow {
@@ -97,7 +120,7 @@ interface SymptomTagRow {
 
 interface ReminderRuleRow {
   id: string
-  regimen_id: string
+  treatment_id: string
   offsets: string
   time_of_day: string
   snooze_minutes: number
@@ -113,14 +136,29 @@ function mapMedication(row: MedicationRow): Medication {
     id: row.id,
     name: row.name,
     genericName: row.generic_name,
+    brandNames: parseStringArray(row.brand_names),
     defaultDose: row.default_dose,
     unit: row.unit,
     color: row.color,
-    route: row.route === 'iv' ? 'iv' : 'sc',
+    route: row.route,
     diseaseIds: parseStringArray(row.disease_ids),
     catalogKey: row.catalog_key,
     isBuiltin: row.is_builtin === 1,
+    extra: parseExtra(row.extra),
     createdAt: row.created_at,
+  }
+}
+
+function parseExtra(raw: string | null | undefined): Record<string, unknown> {
+  if (!raw) return {}
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+    return {}
+  } catch {
+    return {}
   }
 }
 
@@ -135,10 +173,10 @@ function parseStringArray(raw: string | null | undefined): string[] {
   }
 }
 
-function mapPhase(row: RegimenPhaseRow): RegimenPhase {
+function mapTreatmentPhase(row: TreatmentPhaseRow): TreatmentPhase {
   return {
     id: row.id,
-    regimenId: row.regimen_id,
+    lineId: row.line_id,
     orderIdx: row.order_idx,
     kind: row.kind,
     intervalDays: row.interval_days,
@@ -148,27 +186,67 @@ function mapPhase(row: RegimenPhaseRow): RegimenPhase {
   }
 }
 
-function mapRegimen(row: RegimenRow, phases: RegimenPhase[]): Regimen {
+function mapOralPlan(row: TreatmentLineRow): OralPlan | null {
+  if (row.kind !== 'oral') return null
+  if (row.oral_start === null || row.oral_frequency === null) return null
   return {
-    id: row.id,
-    medicationId: row.medication_id,
-    name: row.name,
-    anchor: row.anchor,
-    windowDays: row.window_days,
-    isActive: row.is_active === 1,
-    createdAt: row.created_at,
-    phases,
+    startDate: row.oral_start,
+    durationDays: row.oral_duration_days,
+    frequency: row.oral_frequency,
+    timesPerPeriod: row.oral_times_per_period ?? 0,
+    daysOfWeek: parseDaysOfWeek(row.oral_days_of_week),
+    remindTime: row.oral_remind_time ?? '09:00',
   }
 }
 
-function mapInjection(row: InjectionRow): Injection {
+function parseDaysOfWeek(raw: string | null | undefined): number[] {
+  if (!raw) return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (item): item is number => typeof item === 'number' && Number.isInteger(item) && item >= 0 && item <= 6,
+    )
+  } catch {
+    return []
+  }
+}
+
+function mapTreatmentLine(row: TreatmentLineRow, phases: TreatmentPhase[]): TreatmentLine {
   return {
     id: row.id,
-    regimenId: row.regimen_id,
+    treatmentId: row.treatment_id,
     medicationId: row.medication_id,
-    injectedAt: row.injected_at,
+    kind: row.kind,
+    label: row.label,
+    isHost: row.is_host === 1,
+    syncWithHost: row.sync_with_host === 1,
+    anchor: row.anchor,
+    windowDays: row.window_days,
+    phases,
+    oral: mapOralPlan(row),
+  }
+}
+
+function mapTreatment(row: TreatmentRow, lines: TreatmentLine[]): Treatment {
+  return {
+    id: row.id,
+    name: row.name,
+    isActive: row.is_active === 1,
+    createdAt: row.created_at,
+    lines,
+  }
+}
+
+function mapDoseLog(row: DoseLogRow): DoseLog {
+  return {
+    id: row.id,
+    lineId: row.line_id,
+    scheduledAt: row.scheduled_at,
+    takenAt: row.taken_at,
+    status: row.status,
     dose: row.dose,
-    unit: row.unit,
+    unit: row.unit ?? '',
     site: row.site,
     lotNumber: row.lot_number,
     note: row.note,
@@ -198,7 +276,7 @@ function mapSymptom(row: SymptomLogRow): SymptomLog {
     tags: parseTags(row.tags),
     note: row.note,
     temperature: row.temperature,
-    injectionId: row.injection_id,
+    injectionId: row.dose_log_id,
   }
 }
 
@@ -224,10 +302,10 @@ function parseOffsets(raw: string): number[] {
   }
 }
 
-function mapReminderRule(row: ReminderRuleRow): ReminderRule {
+function mapReminderRule(row: ReminderRuleRow): ReminderRuleV5 {
   return {
     id: row.id,
-    regimenId: row.regimen_id,
+    treatmentId: row.treatment_id,
     offsets: parseOffsets(row.offsets),
     timeOfDay: row.time_of_day,
     snoozeMinutes: row.snooze_minutes,
@@ -241,6 +319,10 @@ function mapReminderRule(row: ReminderRuleRow): ReminderRule {
 
 const ANCHORS: RegimenAnchor[] = ['actual', 'planned']
 const PHASE_KINDS: PhaseKind[] = ['loading', 'maintenance']
+const LINE_KINDS: LineKind[] = ['injection', 'oral']
+const ORAL_FREQUENCIES: OralFrequency[] = ['daily', 'weekly', 'custom']
+const DOSE_STATUSES: DoseStatus[] = ['done', 'skipped', 'missed']
+const MEDICATION_ROUTES: MedicationRoute[] = ['sc', 'iv', 'oral']
 const INJECTION_SITES: InjectionSite[] = [
   'abdomen_ul',
   'abdomen_ur',
@@ -311,7 +393,56 @@ function requirePhaseKind(value: unknown): PhaseKind {
   return value as PhaseKind
 }
 
+function requireLineKind(value: unknown): LineKind {
+  if (typeof value !== 'string' || !LINE_KINDS.includes(value as LineKind)) {
+    fail('用药方式只能是注射或口服')
+  }
+  return value as LineKind
+}
+
+function requireOralFrequency(value: unknown): OralFrequency {
+  if (typeof value !== 'string' || !ORAL_FREQUENCIES.includes(value as OralFrequency)) {
+    fail('服药频率只能是每天、每周或自定义')
+  }
+  return value as OralFrequency
+}
+
+function requireDoseStatus(value: unknown): DoseStatus {
+  if (typeof value !== 'string' || !DOSE_STATUSES.includes(value as DoseStatus)) {
+    fail('打卡状态只能是已完成、已跳过或漏用')
+  }
+  return value as DoseStatus
+}
+
+function normalizeRoute(value: unknown, fallback: MedicationRoute): MedicationRoute {
+  if (value === null || value === undefined) return fallback
+  if (typeof value !== 'string' || !MEDICATION_ROUTES.includes(value as MedicationRoute)) {
+    fail('给药途径只能是皮下、静脉或口服')
+  }
+  return value as MedicationRoute
+}
+
+/** 0 = 周日 … 6 = 周六，去重升序。 */
+function normalizeDaysOfWeek(value: unknown): number[] {
+  if (value === null || value === undefined) return []
+  if (!Array.isArray(value)) fail('服药星期必须是数组')
+  const seen = new Set<number>()
+  for (const item of value) {
+    const day = requireInteger(item, '服药星期', 0)
+    if (day > 6) fail('服药星期必须在 0 到 6 之间')
+    seen.add(day)
+  }
+  return [...seen].sort((a, b) => a - b)
+}
+
 const TIME_OF_DAY_RE = /^([01]\d|2[0-3]):[0-5]\d$/
+
+function requireTimeOfDay(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !TIME_OF_DAY_RE.test(value)) {
+    fail(`${label}格式必须为 HH:mm`)
+  }
+  return value
+}
 
 // ---------------------------------------------------------------------------
 // 内部查询
@@ -321,20 +452,19 @@ async function getMedicationRow(db: SQLiteDatabase, id: string): Promise<Medicat
   return db.getFirstAsync<MedicationRow>('SELECT * FROM medication WHERE id = ?', id)
 }
 
-async function getRegimenRow(db: SQLiteDatabase, id: string): Promise<RegimenRow | null> {
-  return db.getFirstAsync<RegimenRow>('SELECT * FROM regimen WHERE id = ?', id)
+async function getTreatmentRow(db: SQLiteDatabase, id: string): Promise<TreatmentRow | null> {
+  return db.getFirstAsync<TreatmentRow>('SELECT * FROM treatment WHERE id = ?', id)
 }
 
-async function getPhasesFor(db: SQLiteDatabase, regimenId: string): Promise<RegimenPhase[]> {
-  const rows = await db.getAllAsync<RegimenPhaseRow>(
-    'SELECT * FROM regimen_phase WHERE regimen_id = ? ORDER BY order_idx ASC',
-    regimenId,
-  )
-  return rows.map(mapPhase)
+async function getTreatmentLineRow(
+  db: SQLiteDatabase,
+  id: string,
+): Promise<TreatmentLineRow | null> {
+  return db.getFirstAsync<TreatmentLineRow>('SELECT * FROM treatment_line WHERE id = ?', id)
 }
 
-async function getInjectionRow(db: SQLiteDatabase, id: string): Promise<InjectionRow | null> {
-  return db.getFirstAsync<InjectionRow>('SELECT * FROM injection WHERE id = ?', id)
+async function getDoseLogRow(db: SQLiteDatabase, id: string): Promise<DoseLogRow | null> {
+  return db.getFirstAsync<DoseLogRow>('SELECT * FROM dose_log WHERE id = ?', id)
 }
 
 async function getSymptomRow(db: SQLiteDatabase, id: string): Promise<SymptomLogRow | null> {
@@ -343,11 +473,11 @@ async function getSymptomRow(db: SQLiteDatabase, id: string): Promise<SymptomLog
 
 async function getReminderRowFor(
   db: SQLiteDatabase,
-  regimenId: string,
+  treatmentId: string,
 ): Promise<ReminderRuleRow | null> {
   return db.getFirstAsync<ReminderRuleRow>(
-    'SELECT * FROM reminder_rule WHERE regimen_id = ?',
-    regimenId,
+    'SELECT * FROM reminder_rule WHERE treatment_id = ?',
+    treatmentId,
   )
 }
 
@@ -357,10 +487,70 @@ async function requireMedicationExists(db: SQLiteDatabase, id: string): Promise<
   return row
 }
 
-async function requireRegimenExists(db: SQLiteDatabase, id: string): Promise<RegimenRow> {
-  const row = await getRegimenRow(db, id)
-  if (!row) fail('用药方案不存在')
+async function requireTreatmentExists(db: SQLiteDatabase, id: string): Promise<TreatmentRow> {
+  const row = await getTreatmentRow(db, id)
+  if (!row) fail('治疗方案不存在')
   return row
+}
+
+async function requireTreatmentLineExists(
+  db: SQLiteDatabase,
+  id: string,
+): Promise<TreatmentLineRow> {
+  const row = await getTreatmentLineRow(db, id)
+  if (!row) fail('治疗方案里的用药条目不存在')
+  return row
+}
+
+/** 一次取回多条治疗方案的 line + phase，避免 N+1。 */
+async function loadTreatments(db: SQLiteDatabase, rows: TreatmentRow[]): Promise<Treatment[]> {
+  if (rows.length === 0) return []
+
+  const placeholders = rows.map(() => '?').join(', ')
+  const treatmentIds = rows.map((row) => row.id)
+  const lineRows = await db.getAllAsync<TreatmentLineRow>(
+    `SELECT * FROM treatment_line
+      WHERE treatment_id IN (${placeholders})
+      ORDER BY is_host DESC, rowid ASC`,
+    treatmentIds,
+  )
+
+  const phasesByLine = new Map<string, TreatmentPhase[]>()
+  if (lineRows.length > 0) {
+    const linePlaceholders = lineRows.map(() => '?').join(', ')
+    const phaseRows = await db.getAllAsync<TreatmentPhaseRow>(
+      `SELECT * FROM treatment_phase
+        WHERE line_id IN (${linePlaceholders})
+        ORDER BY order_idx ASC`,
+      lineRows.map((row) => row.id),
+    )
+    for (const phase of phaseRows) {
+      const list = phasesByLine.get(phase.line_id)
+      if (list) {
+        list.push(mapTreatmentPhase(phase))
+      } else {
+        phasesByLine.set(phase.line_id, [mapTreatmentPhase(phase)])
+      }
+    }
+  }
+
+  const linesByTreatment = new Map<string, TreatmentLine[]>()
+  for (const lineRow of lineRows) {
+    const line = mapTreatmentLine(lineRow, phasesByLine.get(lineRow.id) ?? [])
+    const list = linesByTreatment.get(lineRow.treatment_id)
+    if (list) {
+      list.push(line)
+    } else {
+      linesByTreatment.set(lineRow.treatment_id, [line])
+    }
+  }
+
+  return rows.map((row) => mapTreatment(row, linesByTreatment.get(row.id) ?? []))
+}
+
+async function loadTreatment(db: SQLiteDatabase, row: TreatmentRow): Promise<Treatment> {
+  const [treatment] = await loadTreatments(db, [row])
+  return treatment
 }
 
 // ---------------------------------------------------------------------------
@@ -401,7 +591,7 @@ export const medications = {
       input.genericName === null || input.genericName === undefined
         ? null
         : requireNonEmptyString(input.genericName, '通用名')
-    const route: MedicationRoute = input.route === 'iv' ? 'iv' : 'sc'
+    const route = normalizeRoute(input.route, 'sc')
     const diseaseIds = Array.isArray(input.diseaseIds)
       ? input.diseaseIds.filter((id) => typeof id === 'string' && id.length > 0)
       : []
@@ -409,6 +599,7 @@ export const medications = {
       input.catalogKey === null || input.catalogKey === undefined
         ? null
         : requireNonEmptyString(input.catalogKey, '目录标识')
+    const brandNames = normalizeNames(input.brandNames, '商品名')
 
     if (typeof input.isBuiltin !== 'boolean') fail('isBuiltin 必须是布尔值')
 
@@ -417,6 +608,7 @@ export const medications = {
       id: Crypto.randomUUID(),
       name,
       generic_name: genericName,
+      brand_names: JSON.stringify(brandNames),
       default_dose: defaultDose,
       unit,
       color,
@@ -424,17 +616,19 @@ export const medications = {
       disease_ids: JSON.stringify(diseaseIds),
       catalog_key: catalogKey,
       is_builtin: input.isBuiltin ? 1 : 0,
+      extra: JSON.stringify(isPlainObject(input.extra) ? input.extra : {}),
       created_at: Date.now(),
     }
 
     await db.runAsync(
       `INSERT INTO medication
-        (id, name, generic_name, default_dose, unit, color, route, disease_ids,
-         catalog_key, is_builtin, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        (id, name, generic_name, brand_names, default_dose, unit, color, route,
+         disease_ids, catalog_key, is_builtin, extra, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       row.id,
       row.name,
       row.generic_name,
+      row.brand_names,
       row.default_dose,
       row.unit,
       row.color,
@@ -442,9 +636,81 @@ export const medications = {
       row.disease_ids,
       row.catalog_key,
       row.is_builtin,
+      row.extra,
       row.created_at,
     )
     return mapMedication(row)
+  },
+
+  /**
+   * 修改药物。
+   * 内置药的名称/通用名/商品名/途径由目录维护，只允许改默认剂量；
+   * 自定义药可以改全部字段。
+   */
+  async update(
+    id: string,
+    patch: Partial<
+      Pick<
+        Medication,
+        'name' | 'genericName' | 'brandNames' | 'defaultDose' | 'unit' | 'route' | 'extra'
+      >
+    >,
+  ): Promise<Medication> {
+    requireNonEmptyString(id, '药物 ID')
+    const db = await getDatabase()
+    const row = await getMedicationRow(db, id)
+    if (!row) fail('药物不存在')
+
+    const builtin = row.is_builtin === 1
+    if (builtin) {
+      const forbidden = ['name', 'genericName', 'brandNames', 'route'] as const
+      if (forbidden.some((key) => patch[key] !== undefined)) {
+        fail('内置药物的名称与给药途径来自目录，不能修改')
+      }
+    }
+
+    const sets: string[] = []
+    const values: Array<string | number | null> = []
+
+    if (patch.name !== undefined) {
+      sets.push('name = ?')
+      values.push(requireNonEmptyString(patch.name, '药物名称'))
+    }
+    if (patch.genericName !== undefined) {
+      sets.push('generic_name = ?')
+      values.push(
+        patch.genericName === null ? null : requireNonEmptyString(patch.genericName, '通用名'),
+      )
+    }
+    if (patch.brandNames !== undefined) {
+      sets.push('brand_names = ?')
+      values.push(JSON.stringify(normalizeNames(patch.brandNames, '商品名')))
+    }
+    if (patch.defaultDose !== undefined) {
+      sets.push('default_dose = ?')
+      values.push(requireNullableDose(patch.defaultDose, '默认剂量'))
+    }
+    if (patch.unit !== undefined) {
+      sets.push('unit = ?')
+      values.push(requireNonEmptyString(patch.unit, '单位'))
+    }
+    if (patch.route !== undefined) {
+      sets.push('route = ?')
+      values.push(normalizeRoute(patch.route, 'sc'))
+    }
+    if (patch.extra !== undefined) {
+      sets.push('extra = ?')
+      values.push(JSON.stringify(isPlainObject(patch.extra) ? patch.extra : {}))
+    }
+
+    if (sets.length === 0) return mapMedication(row)
+
+    values.push(id)
+    await db.runAsync(`UPDATE medication SET ${sets.join(', ')} WHERE id = ?`, values)
+
+    const updated = await getMedicationRow(db, id)
+    if (!updated) fail('药物不存在')
+    return mapMedication(updated)
   },
 
   async remove(id: string): Promise<void> {
@@ -455,227 +721,567 @@ export const medications = {
     if (row.is_builtin === 1) fail('内置药物不可删除')
 
     const used = await db.getFirstAsync<{ id: string }>(
-      'SELECT id FROM regimen WHERE medication_id = ? LIMIT 1',
+      'SELECT id FROM treatment_line WHERE medication_id = ? LIMIT 1',
       id,
     )
-    if (used) fail('该药物已被用药方案使用，请先删除相关方案')
+    if (used) fail('该药物已被治疗方案使用，请先删除相关方案')
 
     await db.runAsync('DELETE FROM medication WHERE id = ?', id)
   },
 }
 
 // ---------------------------------------------------------------------------
-// regimens
+// treatments
 // ---------------------------------------------------------------------------
 
-async function loadRegimens(db: SQLiteDatabase, rows: RegimenRow[]): Promise<Regimen[]> {
-  if (rows.length === 0) return []
-
-  const placeholders = rows.map(() => '?').join(', ')
-  const phaseRows = await db.getAllAsync<RegimenPhaseRow>(
-    `SELECT * FROM regimen_phase
-      WHERE regimen_id IN (${placeholders})
-      ORDER BY order_idx ASC`,
-    rows.map((row) => row.id),
-  )
-
-  const byRegimen = new Map<string, RegimenPhase[]>()
-  for (const phase of phaseRows) {
-    const list = byRegimen.get(phase.regimen_id)
-    if (list) {
-      list.push(mapPhase(phase))
-    } else {
-      byRegimen.set(phase.regimen_id, [mapPhase(phase)])
-    }
-  }
-
-  return rows.map((row) => mapRegimen(row, byRegimen.get(row.id) ?? []))
+/** 新建治疗方案时的用药条目（id 由仓库生成）。 */
+export interface TreatmentLineInput {
+  medicationId: string
+  kind: LineKind
+  label: string
+  isHost?: boolean
+  syncWithHost?: boolean
+  anchor?: RegimenAnchor
+  windowDays?: number
+  /** 注射线必填，至少一个阶段 */
+  phases?: Array<Omit<TreatmentPhase, 'id' | 'lineId'>>
+  /** 口服线必填 */
+  oral?: OralPlan | null
 }
 
-export const regimens = {
-  async list(): Promise<Regimen[]> {
-    const db = await getDatabase()
-    const rows = await db.getAllAsync<RegimenRow>(
-      'SELECT * FROM regimen ORDER BY created_at ASC',
+export interface TreatmentInput {
+  name: string
+  lines: TreatmentLineInput[]
+}
+
+interface NormalizedLine {
+  row: TreatmentLineRow
+  phases: TreatmentPhaseRow[]
+}
+
+function normalizeOralPlan(value: unknown): OralPlan {
+  if (!isPlainObject(value)) fail('口服计划不能为空')
+  const plan = value as unknown as OralPlan
+  const startDate = requireTimestamp(plan.startDate, '开始服药时间')
+  const durationDays =
+    plan.durationDays === null || plan.durationDays === undefined
+      ? null
+      : requireInteger(plan.durationDays, '服药天数', 1)
+  const frequency = requireOralFrequency(plan.frequency)
+  const timesPerPeriod = requireInteger(plan.timesPerPeriod, '每个周期的次数', 0)
+  if (frequency !== 'daily' && timesPerPeriod <= 0) {
+    fail('每周或自定义服药频率需要填写每个周期的次数')
+  }
+  const daysOfWeek = normalizeDaysOfWeek(plan.daysOfWeek)
+  if (frequency !== 'daily' && daysOfWeek.length === 0) {
+    fail('请至少选择一天服药')
+  }
+  const remindTime = requireTimeOfDay(plan.remindTime, '服药提醒时间')
+  return { startDate, durationDays, frequency, timesPerPeriod, daysOfWeek, remindTime }
+}
+
+function normalizePhases(
+  lineId: string,
+  phases: unknown,
+): { phases: TreatmentPhaseRow[]; mapped: TreatmentPhase[] } {
+  if (!Array.isArray(phases) || phases.length === 0) {
+    fail('注射用药至少需要一个阶段')
+  }
+  const rows: TreatmentPhaseRow[] = phases.map((phase) => {
+    const orderIdx = requireInteger(phase.orderIdx, '阶段顺序', 0)
+    const kind = requirePhaseKind(phase.kind)
+    const intervalDays = requireInteger(phase.intervalDays, '间隔天数', 1)
+    const repeatCount = requireInteger(phase.repeatCount, '重复次数', 0)
+    const dose = requireNullableDose(phase.dose, '阶段剂量')
+    const unit = requireNonEmptyString(phase.unit, '阶段单位')
+    return {
+      id: Crypto.randomUUID(),
+      line_id: lineId,
+      order_idx: orderIdx,
+      kind,
+      interval_days: intervalDays,
+      repeat_count: repeatCount,
+      dose,
+      unit,
+    }
+  })
+
+  const seen = new Set<number>()
+  for (const phase of rows) {
+    if (seen.has(phase.order_idx)) fail('阶段顺序不能重复')
+    seen.add(phase.order_idx)
+  }
+  rows.sort((a, b) => a.order_idx - b.order_idx)
+  return { phases: rows, mapped: rows.map(mapTreatmentPhase) }
+}
+
+function normalizeLine(treatmentId: string, input: TreatmentLineInput): NormalizedLine {
+  const medicationId = requireNonEmptyString(input?.medicationId, '药物 ID')
+  const kind = requireLineKind(input.kind)
+  const label = requireNonEmptyString(input.label, '用药条目名称')
+  const anchor = requireAnchor(input.anchor ?? 'actual')
+  const windowDays = requireInteger(input.windowDays ?? 2, '按时窗口', 0)
+  const isHost = normalizeBoolean(input.isHost ?? false, '主药标记')
+  const syncWithHost = normalizeBoolean(input.syncWithHost ?? false, '跟随主药标记')
+  if (isHost && syncWithHost) fail('主药不能同时跟随其他主药')
+  if (kind === 'oral' && isHost) fail('口服用药不能设为主药')
+  if (kind === 'oral' && syncWithHost) fail('口服用药不参与跟随主药')
+
+  const lineId = Crypto.randomUUID()
+  const row: TreatmentLineRow = {
+    id: lineId,
+    treatment_id: treatmentId,
+    medication_id: medicationId,
+    kind,
+    label,
+    is_host: isHost ? 1 : 0,
+    sync_with_host: syncWithHost ? 1 : 0,
+    anchor,
+    window_days: windowDays,
+    oral_start: null,
+    oral_duration_days: null,
+    oral_frequency: null,
+    oral_times_per_period: null,
+    oral_days_of_week: null,
+    oral_remind_time: null,
+  }
+
+  if (kind === 'oral') {
+    const oral = normalizeOralPlan(input.oral)
+    row.oral_start = oral.startDate
+    row.oral_duration_days = oral.durationDays
+    row.oral_frequency = oral.frequency
+    row.oral_times_per_period = oral.timesPerPeriod
+    row.oral_days_of_week = JSON.stringify(oral.daysOfWeek)
+    row.oral_remind_time = oral.remindTime
+    return { row, phases: [] }
+  }
+
+  const { phases } = normalizePhases(lineId, input.phases)
+  return { row, phases }
+}
+
+function normalizeBoolean(value: unknown, label: string): boolean {
+  if (typeof value !== 'boolean') fail(`${label}必须是布尔值`)
+  return value
+}
+
+async function insertLine(db: SQLiteDatabase, line: NormalizedLine): Promise<void> {
+  const row = line.row
+  await db.runAsync(
+    `INSERT INTO treatment_line
+      (id, treatment_id, medication_id, kind, label, is_host, sync_with_host, anchor,
+       window_days, oral_start, oral_duration_days, oral_frequency, oral_times_per_period,
+       oral_days_of_week, oral_remind_time)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    row.id,
+    row.treatment_id,
+    row.medication_id,
+    row.kind,
+    row.label,
+    row.is_host,
+    row.sync_with_host,
+    row.anchor,
+    row.window_days,
+    row.oral_start,
+    row.oral_duration_days,
+    row.oral_frequency,
+    row.oral_times_per_period,
+    row.oral_days_of_week,
+    row.oral_remind_time,
+  )
+  for (const phase of line.phases) {
+    await db.runAsync(
+      `INSERT INTO treatment_phase
+        (id, line_id, order_idx, kind, interval_days, repeat_count, dose, unit)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      phase.id,
+      phase.line_id,
+      phase.order_idx,
+      phase.kind,
+      phase.interval_days,
+      phase.repeat_count,
+      phase.dose,
+      phase.unit,
     )
-    return loadRegimens(db, rows)
+  }
+}
+
+/** `update` 可以改的字段：名称，以及逐条线的配置。 */
+export interface TreatmentPatch {
+  name?: string
+  /** 按 lineId 覆盖已有 line 的字段（phases 传给注射线时会整体替换） */
+  lines?: Array<Partial<Omit<TreatmentLine, 'id' | 'treatmentId' | 'kind'>> & { id: string }>
+}
+
+interface PreparedLineUpdate {
+  id: string
+  sets: string[]
+  values: Array<string | number | null>
+  phases: TreatmentPhaseRow[] | null
+  isHost: 0 | 1 | undefined
+}
+
+export const treatments = {
+  async list(): Promise<Treatment[]> {
+    const db = await getDatabase()
+    const rows = await db.getAllAsync<TreatmentRow>(
+      'SELECT * FROM treatment ORDER BY created_at ASC',
+    )
+    return loadTreatments(db, rows)
   },
 
-  async listActive(): Promise<Regimen | null> {
+  async getActive(): Promise<Treatment | null> {
     const db = await getDatabase()
-    const row = await db.getFirstAsync<RegimenRow>(
-      'SELECT * FROM regimen WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1',
+    const row = await db.getFirstAsync<TreatmentRow>(
+      'SELECT * FROM treatment WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1',
     )
     if (!row) return null
-    const phases = await getPhasesFor(db, row.id)
-    return mapRegimen(row, phases)
+    return loadTreatment(db, row)
   },
 
-  async get(id: string): Promise<Regimen | null> {
-    requireNonEmptyString(id, '用药方案 ID')
+  async get(id: string): Promise<Treatment | null> {
+    requireNonEmptyString(id, '治疗方案 ID')
     const db = await getDatabase()
-    const row = await getRegimenRow(db, id)
+    const row = await getTreatmentRow(db, id)
     if (!row) return null
-    const phases = await getPhasesFor(db, row.id)
-    return mapRegimen(row, phases)
+    return loadTreatment(db, row)
   },
 
-  async create(input: {
-    medicationId: string
-    name: string
-    anchor: RegimenAnchor
-    windowDays: number
-    phases: Array<Omit<RegimenPhase, 'id' | 'regimenId'>>
-  }): Promise<Regimen> {
-    const medicationId = requireNonEmptyString(input?.medicationId, '药物 ID')
-    const name = requireNonEmptyString(input?.name, '方案名称')
-    const anchor = requireAnchor(input.anchor)
-    const windowDays = requireInteger(input.windowDays, '按时窗口', 0)
-
-    if (!Array.isArray(input.phases) || input.phases.length === 0) {
-      fail('用药方案至少需要一个阶段')
+  async create(input: TreatmentInput): Promise<Treatment> {
+    const name = requireNonEmptyString(input?.name, '治疗方案名称')
+    if (!Array.isArray(input.lines) || input.lines.length === 0) {
+      fail('治疗方案至少需要一种药')
     }
 
     const db = await getDatabase()
-    await requireMedicationExists(db, medicationId)
 
-    const regimenId = Crypto.randomUUID()
+    const treatmentId = Crypto.randomUUID()
     const createdAt = Date.now()
-    const phaseRows: RegimenPhaseRow[] = input.phases.map((phase) => {
-      const orderIdx = requireInteger(phase.orderIdx, '阶段顺序', 0)
-      const kind = requirePhaseKind(phase.kind)
-      const intervalDays = requireInteger(phase.intervalDays, '间隔天数', 1)
-      const repeatCount = requireInteger(phase.repeatCount, '重复次数', 0)
-      const dose = requireNullableDose(phase.dose, '阶段剂量')
-      const unit = requireNonEmptyString(phase.unit, '阶段单位')
-      return {
-        id: Crypto.randomUUID(),
-        regimen_id: regimenId,
-        order_idx: orderIdx,
-        kind,
-        interval_days: intervalDays,
-        repeat_count: repeatCount,
-        dose,
-        unit,
+
+    const lineIds = new Set<string>()
+    const lines: NormalizedLine[] = []
+    for (const lineInput of input.lines) {
+      const medicationId = requireNonEmptyString(lineInput?.medicationId, '药物 ID')
+      await requireMedicationExists(db, medicationId)
+      const normalized = normalizeLine(treatmentId, lineInput)
+      if (lineIds.has(normalized.row.medication_id)) {
+        fail('同一个治疗方案里不能重复添加同一种药')
       }
-    })
-
-    const seen = new Set<number>()
-    for (const phase of phaseRows) {
-      if (seen.has(phase.order_idx)) fail('阶段顺序不能重复')
-      seen.add(phase.order_idx)
+      lineIds.add(normalized.row.medication_id)
+      lines.push(normalized)
     }
-    phaseRows.sort((a, b) => a.order_idx - b.order_idx)
 
-    const row: RegimenRow = {
-      id: regimenId,
-      medication_id: medicationId,
+    const hosts = lines.filter((line) => line.row.is_host === 1)
+    if (hosts.length > 1) fail('一个治疗方案只能有一个主药')
+
+    const row: TreatmentRow = {
+      id: treatmentId,
       name,
-      anchor,
-      window_days: windowDays,
       is_active: 0,
       created_at: createdAt,
     }
 
     await db.withTransactionAsync(async () => {
       await db.runAsync(
-        `INSERT INTO regimen
-          (id, medication_id, name, anchor, window_days, is_active, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        'INSERT INTO treatment (id, name, is_active, created_at) VALUES (?, ?, ?, ?)',
         row.id,
-        row.medication_id,
         row.name,
-        row.anchor,
-        row.window_days,
         row.is_active,
         row.created_at,
       )
-      for (const phase of phaseRows) {
-        await db.runAsync(
-          `INSERT INTO regimen_phase
-            (id, regimen_id, order_idx, kind, interval_days, repeat_count, dose, unit)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          phase.id,
-          phase.regimen_id,
-          phase.order_idx,
-          phase.kind,
-          phase.interval_days,
-          phase.repeat_count,
-          phase.dose,
-          phase.unit,
-        )
+      for (const line of lines) {
+        await insertLine(db, line)
       }
     })
 
-    return mapRegimen(row, phaseRows.map(mapPhase))
+    return loadTreatment(db, row)
   },
 
-  async setActive(id: string, active: boolean): Promise<void> {
-    requireNonEmptyString(id, '用药方案 ID')
+  /** 给已有治疗方案增加一条用药线（导入新药时用）。 */
+  async addLine(treatmentId: string, input: TreatmentLineInput): Promise<TreatmentLine> {
+    requireNonEmptyString(treatmentId, '治疗方案 ID')
+    const db = await getDatabase()
+    await requireTreatmentExists(db, treatmentId)
+
+    const medicationId = requireNonEmptyString(input?.medicationId, '药物 ID')
+    await requireMedicationExists(db, medicationId)
+    const duplicate = await db.getFirstAsync<{ id: string }>(
+      'SELECT id FROM treatment_line WHERE treatment_id = ? AND medication_id = ? AND kind = ? LIMIT 1',
+      treatmentId,
+      medicationId,
+      input.kind,
+    )
+    if (duplicate) fail('同一个治疗方案里不能重复添加同一种药')
+
+    const normalized = normalizeLine(treatmentId, input)
+    if (normalized.row.is_host === 1) {
+      const host = await db.getFirstAsync<{ id: string }>(
+        'SELECT id FROM treatment_line WHERE treatment_id = ? AND is_host = 1 LIMIT 1',
+        treatmentId,
+      )
+      if (host) fail('一个治疗方案只能有一个主药')
+    }
+
+    // 不在仓库层开事务：导入时会把它放进自己的事务里，避免嵌套 BEGIN。
+    await insertLine(db, normalized)
+
+    return mapTreatmentLine(normalized.row, normalized.phases.map(mapTreatmentPhase))
+  },
+
+  /** 删除一条用药线（其打卡记录会随外键级联删除）。 */
+  async removeLine(lineId: string): Promise<void> {
+    requireNonEmptyString(lineId, '用药线 ID')
+    const db = await getDatabase()
+    const row = await db.getFirstAsync<{ id: string }>(
+      'SELECT id FROM treatment_line WHERE id = ? LIMIT 1',
+      lineId,
+    )
+    if (!row) fail('用药线不存在')
+    await db.runAsync('DELETE FROM treatment_line WHERE id = ?', lineId)
+  },
+
+  async setActive(id: string, active: boolean): Promise<void> {    requireNonEmptyString(id, '治疗方案 ID')
     if (typeof active !== 'boolean') fail('激活状态必须是布尔值')
     const db = await getDatabase()
-    await requireRegimenExists(db, id)
+    await requireTreatmentExists(db, id)
 
     await db.withTransactionAsync(async () => {
       if (active) {
-        await db.runAsync('UPDATE regimen SET is_active = 0 WHERE id <> ?', id)
+        await db.runAsync('UPDATE treatment SET is_active = 0 WHERE id <> ?', id)
       }
-      await db.runAsync('UPDATE regimen SET is_active = ? WHERE id = ?', active ? 1 : 0, id)
+      await db.runAsync('UPDATE treatment SET is_active = ? WHERE id = ?', active ? 1 : 0, id)
     })
   },
 
-  async remove(id: string): Promise<void> {
-    requireNonEmptyString(id, '用药方案 ID')
+  async update(id: string, patch: TreatmentPatch): Promise<Treatment> {
+    requireNonEmptyString(id, '治疗方案 ID')
     const db = await getDatabase()
-    const exists = await getRegimenRow(db, id)
-    if (!exists) fail('用药方案不存在')
-    await db.runAsync('DELETE FROM regimen WHERE id = ?', id)
+    const existing = await requireTreatmentExists(db, id)
+
+    const newName =
+      patch.name !== undefined ? requireNonEmptyString(patch.name, '治疗方案名称') : null
+
+    const linePatches = Array.isArray(patch.lines) ? patch.lines : []
+    const prepared: PreparedLineUpdate[] = []
+    const seenLines = new Set<string>()
+    for (const linePatch of linePatches) {
+      const lineId = requireNonEmptyString(linePatch?.id, '用药条目 ID')
+      if (seenLines.has(lineId)) fail('同一条用药条目不能重复修改')
+      seenLines.add(lineId)
+      const lineRow = await requireTreatmentLineExists(db, lineId)
+      if (lineRow.treatment_id !== id) fail('用药条目不属于该治疗方案')
+
+      const sets: string[] = []
+      const values: Array<string | number | null> = []
+      let isHost: 0 | 1 | undefined
+
+      if (linePatch.medicationId !== undefined) {
+        const medicationId = requireNonEmptyString(linePatch.medicationId, '药物 ID')
+        await requireMedicationExists(db, medicationId)
+        sets.push('medication_id = ?')
+        values.push(medicationId)
+      }
+      if (linePatch.label !== undefined) {
+        sets.push('label = ?')
+        values.push(requireNonEmptyString(linePatch.label, '用药条目名称'))
+      }
+      if (linePatch.anchor !== undefined) {
+        sets.push('anchor = ?')
+        values.push(requireAnchor(linePatch.anchor))
+      }
+      if (linePatch.windowDays !== undefined) {
+        sets.push('window_days = ?')
+        values.push(requireInteger(linePatch.windowDays, '按时窗口', 0))
+      }
+      if (linePatch.isHost !== undefined) {
+        isHost = normalizeBoolean(linePatch.isHost, '主药标记') ? 1 : 0
+        sets.push('is_host = ?')
+        values.push(isHost)
+      }
+      if (linePatch.syncWithHost !== undefined) {
+        sets.push('sync_with_host = ?')
+        values.push(normalizeBoolean(linePatch.syncWithHost, '跟随主药标记') ? 1 : 0)
+      }
+
+      let phases: TreatmentPhaseRow[] | null = null
+      if (linePatch.phases !== undefined) {
+        if (lineRow.kind !== 'injection') fail('口服用药没有注射阶段')
+        phases = normalizePhases(lineId, linePatch.phases).phases
+      }
+
+      if (lineRow.kind === 'oral' && linePatch.oral !== undefined) {
+        const oral = normalizeOralPlan(linePatch.oral)
+        sets.push(
+          'oral_start = ?',
+          'oral_duration_days = ?',
+          'oral_frequency = ?',
+          'oral_times_per_period = ?',
+          'oral_days_of_week = ?',
+          'oral_remind_time = ?',
+        )
+        values.push(
+          oral.startDate,
+          oral.durationDays,
+          oral.frequency,
+          oral.timesPerPeriod,
+          JSON.stringify(oral.daysOfWeek),
+          oral.remindTime,
+        )
+      }
+
+      prepared.push({ id: lineId, sets, values, phases, isHost })
+    }
+
+    // 维护「一个治疗方案只有一个主药」的不变式：允许一次保存里换主药。
+    const newHosts = prepared.filter((entry) => entry.isHost === 1)
+    if (newHosts.length > 1) fail('一个治疗方案只能有一个主药')
+    const clearHosts = newHosts.length > 0
+
+    const touched = prepared.filter((entry) => entry.sets.length > 0 || entry.phases !== null)
+    if (newName === null && touched.length === 0) return loadTreatment(db, existing)
+
+    await db.withTransactionAsync(async () => {
+      if (newName !== null) {
+        await db.runAsync('UPDATE treatment SET name = ? WHERE id = ?', newName, id)
+      }
+      if (clearHosts) {
+        await db.runAsync('UPDATE treatment_line SET is_host = 0 WHERE treatment_id = ?', id)
+      }
+      for (const entry of touched) {
+        if (entry.sets.length > 0) {
+          await db.runAsync(
+            `UPDATE treatment_line SET ${entry.sets.join(', ')} WHERE id = ?`,
+            [...entry.values, entry.id],
+          )
+        }
+        if (entry.phases !== null) {
+          // 阶段整体替换：先删后插，避免 order_idx 冲突
+          await db.runAsync('DELETE FROM treatment_phase WHERE line_id = ?', entry.id)
+          for (const phase of entry.phases) {
+            await db.runAsync(
+              `INSERT INTO treatment_phase
+                (id, line_id, order_idx, kind, interval_days, repeat_count, dose, unit)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+              phase.id,
+              phase.line_id,
+              phase.order_idx,
+              phase.kind,
+              phase.interval_days,
+              phase.repeat_count,
+              phase.dose,
+              phase.unit,
+            )
+          }
+        }
+      }
+    })
+
+    const updated = await getTreatmentRow(db, id)
+    if (!updated) fail('治疗方案不存在')
+    return loadTreatment(db, updated)
+  },
+
+  async remove(id: string): Promise<void> {
+    requireNonEmptyString(id, '治疗方案 ID')
+    const db = await getDatabase()
+    await requireTreatmentExists(db, id)
+    // treatment_line / treatment_phase / dose_log / reminder_rule 都是 ON DELETE CASCADE
+    await db.runAsync('DELETE FROM treatment WHERE id = ?', id)
   },
 }
 
 // ---------------------------------------------------------------------------
-// injections
+// dose logs（注射与口服共用）
 // ---------------------------------------------------------------------------
 
-export const injections = {
-  async list(regimenId?: string): Promise<Injection[]> {
+export interface DoseLogInput {
+  lineId: string
+  scheduledAt: number | null
+  takenAt: number | null
+  status: DoseStatus
+  dose?: number | null
+  unit?: string | null
+  site?: InjectionSite | null
+  lotNumber?: string | null
+  note?: string | null
+}
+
+function normalizeOptionalUnit(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null
+  const text = requireNonEmptyString(value, '单位')
+  return text
+}
+
+function normalizeOptionalSite(value: InjectionSite | null | undefined): InjectionSite | null {
+  if (value === null || value === undefined) return null
+  return requireSite(value)
+}
+
+export const doseLogs = {
+  /** 按 lineId 过滤，或返回全部；按 scheduled_at 升序。 */
+  async list(lineId?: string): Promise<DoseLog[]> {
     const db = await getDatabase()
-    if (regimenId !== undefined) {
-      requireNonEmptyString(regimenId, '用药方案 ID')
-      const rows = await db.getAllAsync<InjectionRow>(
-        'SELECT * FROM injection WHERE regimen_id = ? ORDER BY injected_at ASC, created_at ASC',
-        regimenId,
+    if (lineId !== undefined) {
+      requireNonEmptyString(lineId, '用药条目 ID')
+      const rows = await db.getAllAsync<DoseLogRow>(
+        `SELECT * FROM dose_log WHERE line_id = ?
+          ORDER BY scheduled_at IS NULL, scheduled_at ASC, created_at ASC`,
+        lineId,
       )
-      return rows.map(mapInjection)
+      return rows.map(mapDoseLog)
     }
-    const rows = await db.getAllAsync<InjectionRow>(
-      'SELECT * FROM injection ORDER BY injected_at ASC, created_at ASC',
+    const rows = await db.getAllAsync<DoseLogRow>(
+      'SELECT * FROM dose_log ORDER BY scheduled_at IS NULL, scheduled_at ASC, created_at ASC',
     )
-    return rows.map(mapInjection)
+    return rows.map(mapDoseLog)
   },
 
-  async create(
-    input: Omit<Injection, 'id' | 'createdAt' | 'updatedAt'>,
-  ): Promise<Injection> {
-    const regimenId = requireNonEmptyString(input?.regimenId, '用药方案 ID')
-    const medicationId = requireNonEmptyString(input?.medicationId, '药物 ID')
-    const injectedAt = requireTimestamp(input.injectedAt, '注射时间')
+  /** 按计划时间区间查询（两端都包含），用于趋势与通知。 */
+  async listBetween(from: number, to: number): Promise<DoseLog[]> {
+    const start = requireTimestamp(from, '起始时间')
+    const end = requireTimestamp(to, '结束时间')
+    if (end < start) fail('结束时间不能早于起始时间')
+    const db = await getDatabase()
+    const rows = await db.getAllAsync<DoseLogRow>(
+      `SELECT * FROM dose_log
+        WHERE scheduled_at IS NOT NULL AND scheduled_at BETWEEN ? AND ?
+        ORDER BY scheduled_at ASC, created_at ASC`,
+      start,
+      end,
+    )
+    return rows.map(mapDoseLog)
+  },
+
+  async create(input: DoseLogInput): Promise<DoseLog> {
+    const lineId = requireNonEmptyString(input?.lineId, '用药条目 ID')
+    const status = requireDoseStatus(input.status)
+    const scheduledAt =
+      input.scheduledAt === null || input.scheduledAt === undefined
+        ? null
+        : requireTimestamp(input.scheduledAt, '计划时间')
+    const takenAt =
+      input.takenAt === null || input.takenAt === undefined
+        ? null
+        : requireTimestamp(input.takenAt, '打卡时间')
+    if (status === 'done' && takenAt === null) fail('已完成的记录需要填写打卡时间')
+
     const dose = requireNullableDose(input.dose, '剂量')
-    const unit = requireNonEmptyString(input.unit, '单位')
-    const site = requireSite(input.site)
+    const unit = normalizeOptionalUnit(input.unit)
+    const site = normalizeOptionalSite(input.site)
     const lotNumber = normalizeOptionalText(input.lotNumber)
     const note = normalizeOptionalText(input.note)
 
     const db = await getDatabase()
-    await requireRegimenExists(db, regimenId)
-    await requireMedicationExists(db, medicationId)
+    await requireTreatmentLineExists(db, lineId)
 
     const now = Date.now()
-    const row: InjectionRow = {
+    const row: DoseLogRow = {
       id: Crypto.randomUUID(),
-      regimen_id: regimenId,
-      medication_id: medicationId,
-      injected_at: injectedAt,
+      line_id: lineId,
+      scheduled_at: scheduledAt,
+      taken_at: takenAt,
+      status,
       dose,
       unit,
       site,
@@ -686,14 +1292,15 @@ export const injections = {
     }
 
     await db.runAsync(
-      `INSERT INTO injection
-        (id, regimen_id, medication_id, injected_at, dose, unit, site,
+      `INSERT INTO dose_log
+        (id, line_id, scheduled_at, taken_at, status, dose, unit, site,
          lot_number, note, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       row.id,
-      row.regimen_id,
-      row.medication_id,
-      row.injected_at,
+      row.line_id,
+      row.scheduled_at,
+      row.taken_at,
+      row.status,
       row.dose,
       row.unit,
       row.site,
@@ -702,36 +1309,34 @@ export const injections = {
       row.created_at,
       row.updated_at,
     )
-    return mapInjection(row)
+    return mapDoseLog(row)
   },
 
   async update(
     id: string,
-    patch: Partial<Omit<Injection, 'id' | 'createdAt'>>,
-  ): Promise<Injection> {
-    requireNonEmptyString(id, '注射记录 ID')
+    patch: Partial<Omit<DoseLog, 'id' | 'lineId' | 'createdAt'>>,
+  ): Promise<DoseLog> {
+    requireNonEmptyString(id, '打卡记录 ID')
     const db = await getDatabase()
-    const existing = await getInjectionRow(db, id)
-    if (!existing) fail('注射记录不存在')
+    const existing = await getDoseLogRow(db, id)
+    if (!existing) fail('打卡记录不存在')
 
     const sets: string[] = []
     const values: Array<string | number | null> = []
 
-    if (patch.regimenId !== undefined) {
-      const regimenId = requireNonEmptyString(patch.regimenId, '用药方案 ID')
-      await requireRegimenExists(db, regimenId)
-      sets.push('regimen_id = ?')
-      values.push(regimenId)
+    if (patch.scheduledAt !== undefined) {
+      sets.push('scheduled_at = ?')
+      values.push(
+        patch.scheduledAt === null ? null : requireTimestamp(patch.scheduledAt, '计划时间'),
+      )
     }
-    if (patch.medicationId !== undefined) {
-      const medicationId = requireNonEmptyString(patch.medicationId, '药物 ID')
-      await requireMedicationExists(db, medicationId)
-      sets.push('medication_id = ?')
-      values.push(medicationId)
+    if (patch.takenAt !== undefined) {
+      sets.push('taken_at = ?')
+      values.push(patch.takenAt === null ? null : requireTimestamp(patch.takenAt, '打卡时间'))
     }
-    if (patch.injectedAt !== undefined) {
-      sets.push('injected_at = ?')
-      values.push(requireTimestamp(patch.injectedAt, '注射时间'))
+    if (patch.status !== undefined) {
+      sets.push('status = ?')
+      values.push(requireDoseStatus(patch.status))
     }
     if (patch.dose !== undefined) {
       sets.push('dose = ?')
@@ -739,11 +1344,11 @@ export const injections = {
     }
     if (patch.unit !== undefined) {
       sets.push('unit = ?')
-      values.push(requireNonEmptyString(patch.unit, '单位'))
+      values.push(normalizeOptionalUnit(patch.unit))
     }
     if (patch.site !== undefined) {
       sets.push('site = ?')
-      values.push(requireSite(patch.site))
+      values.push(normalizeOptionalSite(patch.site))
     }
     if (patch.lotNumber !== undefined) {
       sets.push('lot_number = ?')
@@ -754,22 +1359,24 @@ export const injections = {
       values.push(normalizeOptionalText(patch.note))
     }
 
+    if (sets.length === 0) return mapDoseLog(existing)
+
     sets.push('updated_at = ?')
     values.push(Date.now())
 
     values.push(id)
-    await db.runAsync(`UPDATE injection SET ${sets.join(', ')} WHERE id = ?`, values)
+    await db.runAsync(`UPDATE dose_log SET ${sets.join(', ')} WHERE id = ?`, values)
 
-    const updated = await getInjectionRow(db, id)
-    if (!updated) fail('注射记录不存在')
-    return mapInjection(updated)
+    const updated = await getDoseLogRow(db, id)
+    if (!updated) fail('打卡记录不存在')
+    return mapDoseLog(updated)
   },
 
   async remove(id: string): Promise<void> {
-    requireNonEmptyString(id, '注射记录 ID')
+    requireNonEmptyString(id, '打卡记录 ID')
     const db = await getDatabase()
-    const result = await db.runAsync('DELETE FROM injection WHERE id = ?', id)
-    if (result.changes === 0) fail('注射记录不存在')
+    const result = await db.runAsync('DELETE FROM dose_log WHERE id = ?', id)
+    if (result.changes === 0) fail('打卡记录不存在')
   },
 }
 
@@ -804,12 +1411,12 @@ export const symptoms = {
     const painScore = normalizePainScore(input.painScore)
     const note = normalizeOptionalText(input.note)
     const temperature = normalizeTemperature(input.temperature)
-    const injectionId = normalizeOptionalId(input.injectionId)
+    const doseLogId = normalizeOptionalId(input.injectionId)
 
     const db = await getDatabase()
-    if (injectionId !== null) {
-      const injection = await getInjectionRow(db, injectionId)
-      if (!injection) fail('关联的注射记录不存在')
+    if (doseLogId !== null) {
+      const log = await getDoseLogRow(db, doseLogId)
+      if (!log) fail('关联的打卡记录不存在')
     }
 
     const row: SymptomLogRow = {
@@ -820,12 +1427,12 @@ export const symptoms = {
       tags: JSON.stringify(tags),
       note,
       temperature,
-      injection_id: injectionId,
+      dose_log_id: doseLogId,
     }
 
     await db.runAsync(
       `INSERT INTO symptom_log
-        (id, logged_at, severity, pain_score, tags, note, temperature, injection_id)
+        (id, logged_at, severity, pain_score, tags, note, temperature, dose_log_id)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       row.id,
       row.logged_at,
@@ -834,7 +1441,7 @@ export const symptoms = {
       row.tags,
       row.note,
       row.temperature,
-      row.injection_id,
+      row.dose_log_id,
     )
     return mapSymptom(row)
   },
@@ -876,13 +1483,13 @@ export const symptoms = {
       values.push(normalizeTemperature(patch.temperature))
     }
     if (patch.injectionId !== undefined) {
-      const injectionId = normalizeOptionalId(patch.injectionId)
-      if (injectionId !== null) {
-        const injection = await getInjectionRow(db, injectionId)
-        if (!injection) fail('关联的注射记录不存在')
+      const doseLogId = normalizeOptionalId(patch.injectionId)
+      if (doseLogId !== null) {
+        const log = await getDoseLogRow(db, doseLogId)
+        if (!log) fail('关联的打卡记录不存在')
       }
-      sets.push('injection_id = ?')
-      values.push(injectionId)
+      sets.push('dose_log_id = ?')
+      values.push(doseLogId)
     }
 
     if (sets.length === 0) return mapSymptom(existing)
@@ -907,6 +1514,29 @@ export const symptoms = {
 // symptom tags（用户可维护的症状名称）
 // ---------------------------------------------------------------------------
 
+async function insertSymptomTag(db: SQLiteDatabase, safeName: string): Promise<SymptomTagRow> {
+  const maxRow = await db.getFirstAsync<{ max_order: number | null }>(
+    'SELECT MAX(sort_order) AS max_order FROM symptom_tag',
+  )
+  const row: SymptomTagRow = {
+    id: Crypto.randomUUID(),
+    name: safeName,
+    is_builtin: 0,
+    sort_order: (maxRow?.max_order ?? -1) + 1,
+    created_at: Date.now(),
+  }
+  await db.runAsync(
+    `INSERT INTO symptom_tag (id, name, is_builtin, sort_order, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
+    row.id,
+    row.name,
+    row.is_builtin,
+    row.sort_order,
+    row.created_at,
+  )
+  return row
+}
+
 export const symptomTags = {
   async list(): Promise<SymptomTag[]> {
     const db = await getDatabase()
@@ -927,27 +1557,7 @@ export const symptomTags = {
     )
     if (duplicate) fail('这个症状已经存在')
 
-    const maxRow = await db.getFirstAsync<{ max_order: number | null }>(
-      'SELECT MAX(sort_order) AS max_order FROM symptom_tag',
-    )
-    const row: SymptomTagRow = {
-      id: Crypto.randomUUID(),
-      name: safeName,
-      is_builtin: 0,
-      sort_order: (maxRow?.max_order ?? -1) + 1,
-      created_at: Date.now(),
-    }
-
-    await db.runAsync(
-      `INSERT INTO symptom_tag (id, name, is_builtin, sort_order, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
-      row.id,
-      row.name,
-      row.is_builtin,
-      row.sort_order,
-      row.created_at,
-    )
-    return mapSymptomTag(row)
+    return mapSymptomTag(await insertSymptomTag(db, safeName))
   },
 
   async remove(id: string): Promise<void> {
@@ -969,84 +1579,67 @@ export const symptomTags = {
     )
     if (existing) return { tag: mapSymptomTag(existing), created: false }
 
-    const maxRow = await db.getFirstAsync<{ max_order: number | null }>(
-      'SELECT MAX(sort_order) AS max_order FROM symptom_tag',
-    )
-    const row: SymptomTagRow = {
-      id: Crypto.randomUUID(),
-      name: safeName,
-      is_builtin: 0,
-      sort_order: (maxRow?.max_order ?? -1) + 1,
-      created_at: Date.now(),
-    }
-    await db.runAsync(
-      `INSERT INTO symptom_tag (id, name, is_builtin, sort_order, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
-      row.id,
-      row.name,
-      row.is_builtin,
-      row.sort_order,
-      row.created_at,
-    )
-    return { tag: mapSymptomTag(row), created: true }
+    return { tag: mapSymptomTag(await insertSymptomTag(db, safeName)), created: true }
   },
 }
 
 // ---------------------------------------------------------------------------
-// reminder rules
+// reminder rules（每个治疗方案一条）
 // ---------------------------------------------------------------------------
 
+export interface ReminderRuleInput {
+  treatmentId: string
+  offsets: number[]
+  timeOfDay: string
+  snoozeMinutes: number
+  enabled: boolean
+  id?: string
+}
+
 export const reminderRules = {
-  async getFor(regimenId: string): Promise<ReminderRule | null> {
-    requireNonEmptyString(regimenId, '用药方案 ID')
+  async getFor(treatmentId: string): Promise<ReminderRuleV5 | null> {
+    requireNonEmptyString(treatmentId, '治疗方案 ID')
     const db = await getDatabase()
-    const row = await getReminderRowFor(db, regimenId)
+    const row = await getReminderRowFor(db, treatmentId)
     return row ? mapReminderRule(row) : null
   },
 
-  async upsert(
-    input: Omit<ReminderRule, 'id'> & { id?: string },
-  ): Promise<ReminderRule> {
-    const regimenId = requireNonEmptyString(input?.regimenId, '用药方案 ID')
+  async upsert(input: ReminderRuleInput): Promise<ReminderRuleV5> {
+    const treatmentId = requireNonEmptyString(input?.treatmentId, '治疗方案 ID')
     if (!Array.isArray(input.offsets) || input.offsets.length === 0) {
       fail('提醒偏移不能为空')
     }
     const offsets = input.offsets.map((offset) => requireInteger(offset, '提醒偏移'))
-    if (typeof input.timeOfDay !== 'string' || !TIME_OF_DAY_RE.test(input.timeOfDay)) {
-      fail('提醒时间格式必须为 HH:mm')
-    }
+    const timeOfDay = requireTimeOfDay(input.timeOfDay, '提醒时间')
     const snoozeMinutes = requireInteger(input.snoozeMinutes, '稍后提醒分钟数', 0)
     if (typeof input.enabled !== 'boolean') fail('提醒开关必须是布尔值')
 
     const db = await getDatabase()
-    await requireRegimenExists(db, regimenId)
+    await requireTreatmentExists(db, treatmentId)
 
     const existing =
-      (await getReminderRowFor(db, regimenId)) ??
+      (await getReminderRowFor(db, treatmentId)) ??
       (input.id
-        ? await db.getFirstAsync<ReminderRuleRow>(
-            'SELECT * FROM reminder_rule WHERE id = ?',
-            input.id,
-          )
+        ? await db.getFirstAsync<ReminderRuleRow>('SELECT * FROM reminder_rule WHERE id = ?', input.id)
         : null)
 
     if (existing) {
       await db.runAsync(
         `UPDATE reminder_rule
-            SET regimen_id = ?, offsets = ?, time_of_day = ?, snooze_minutes = ?, enabled = ?
+            SET treatment_id = ?, offsets = ?, time_of_day = ?, snooze_minutes = ?, enabled = ?
           WHERE id = ?`,
-        regimenId,
+        treatmentId,
         JSON.stringify(offsets),
-        input.timeOfDay,
+        timeOfDay,
         snoozeMinutes,
         input.enabled ? 1 : 0,
         existing.id,
       )
       return mapReminderRule({
         ...existing,
-        regimen_id: regimenId,
+        treatment_id: treatmentId,
         offsets: JSON.stringify(offsets),
-        time_of_day: input.timeOfDay,
+        time_of_day: timeOfDay,
         snooze_minutes: snoozeMinutes,
         enabled: input.enabled ? 1 : 0,
       })
@@ -1054,19 +1647,19 @@ export const reminderRules = {
 
     const row: ReminderRuleRow = {
       id: input.id ?? Crypto.randomUUID(),
-      regimen_id: regimenId,
+      treatment_id: treatmentId,
       offsets: JSON.stringify(offsets),
-      time_of_day: input.timeOfDay,
+      time_of_day: timeOfDay,
       snooze_minutes: snoozeMinutes,
       enabled: input.enabled ? 1 : 0,
     }
 
     await db.runAsync(
       `INSERT INTO reminder_rule
-        (id, regimen_id, offsets, time_of_day, snooze_minutes, enabled)
+        (id, treatment_id, offsets, time_of_day, snooze_minutes, enabled)
        VALUES (?, ?, ?, ?, ?, ?)`,
       row.id,
-      row.regimen_id,
+      row.treatment_id,
       row.offsets,
       row.time_of_day,
       row.snooze_minutes,
@@ -1130,6 +1723,25 @@ function normalizeOptionalText(value: string | null | undefined): string | null 
 function normalizeOptionalId(value: string | null | undefined): string | null {
   if (value === null || value === undefined) return null
   return requireNonEmptyString(value, '关联记录 ID')
+}
+
+function normalizeNames(value: unknown, label: string): string[] {
+  if (value === null || value === undefined) return []
+  if (!Array.isArray(value)) fail(`${label}必须是数组`)
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const item of value) {
+    const name = requireNonEmptyString(item, label)
+    if (name.length > 40) fail(`${label}单项最多 40 个字`)
+    if (seen.has(name)) continue
+    seen.add(name)
+    result.push(name)
+  }
+  return result
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function normalizeTemperature(value: number | null | undefined): number | null {

@@ -1,13 +1,17 @@
 import { create } from 'zustand'
 import { findDiseases, resolveDiseaseIds } from '@/data/diseases'
 import {
-  injections as injectionRepo,
+  doseLogs as doseLogRepo,
   medications as medicationRepo,
-  regimens as regimenRepo,
   reminderRules,
   settings as settingsRepo,
   symptoms as symptomRepo,
   symptomTags as symptomTagRepo,
+  treatments as treatmentRepo,
+  type DoseLogInput,
+  type ReminderRuleInput,
+  type TreatmentLineInput,
+  type TreatmentPatch,
 } from '@/db/repo'
 import { rescheduleAll } from '@/notify/scheduler'
 import { importPayload, type ImportResult } from '@/import'
@@ -15,12 +19,12 @@ import type { ImportPayload } from '@/import/schema'
 import type {
   AppSettings,
   Disease,
-  Injection,
+  DoseLog,
   Medication,
-  Regimen,
-  ReminderRule,
+  ReminderRuleV5,
   SymptomLog,
   SymptomTag,
+  Treatment,
 } from '@/types'
 
 /**
@@ -35,37 +39,63 @@ export interface MutationResult {
   notifyWarning: string | null
 }
 
+export interface ImportOutcome {
+  result: ImportResult
+  notifyWarning: string | null
+}
+
+/** 保存治疗方案时传入的用药条目：编辑已有条目时带 `id`。 */
+export type TreatmentLineDraft = TreatmentLineInput & { id?: string }
+
+export interface SaveTreatmentInput {
+  /** 不传表示新建；传了表示编辑已有方案。 */
+  id?: string
+  name: string
+  lines: TreatmentLineDraft[]
+}
+
 export interface AppStore {
   ready: boolean
   refreshing: boolean
   error: string | null
-  regimen: Regimen | null
-  medication: Medication | null
+  /** 当前激活的治疗方案（含所有用药线 / 阶段 / 口服计划） */
+  treatment: Treatment | null
+  /** 全部治疗方案 */
+  treatments: Treatment[]
+  /** 全部用药记录（注射 + 口服） */
+  doseLogs: DoseLog[]
   medications: Medication[]
-  disease: Disease | null
-  diseases: Disease[]
-  injections: Injection[]
   symptoms: SymptomLog[]
   symptomTags: SymptomTag[]
-  reminder: ReminderRule | null
+  reminder: ReminderRuleV5 | null
   settings: AppSettings
+  diseases: Disease[]
+  disease: Disease | null
   reload(): Promise<void>
-  addInjection(input: Omit<Injection, 'id' | 'createdAt' | 'updatedAt'>): Promise<MutationResult>
-  updateInjection(
+  addDoseLog(input: DoseLogInput): Promise<MutationResult>
+  updateDoseLog(id: string, patch: Partial<DoseLogInput>): Promise<MutationResult>
+  removeDoseLog(id: string): Promise<MutationResult>
+  saveTreatment(input: SaveTreatmentInput): Promise<MutationResult>
+  setActiveTreatment(id: string, active: boolean): Promise<MutationResult>
+  updateReminder(input: ReminderRuleInput): Promise<MutationResult>
+  addMedication(input: Omit<Medication, 'id' | 'createdAt'>): Promise<MutationResult>
+  updateMedication(
     id: string,
-    patch: Partial<Omit<Injection, 'id' | 'createdAt' | 'updatedAt'>>,
+    patch: Partial<
+      Pick<
+        Medication,
+        'name' | 'genericName' | 'brandNames' | 'defaultDose' | 'unit' | 'route' | 'extra'
+      >
+    >,
   ): Promise<MutationResult>
-  removeInjection(id: string): Promise<MutationResult>
+  removeMedication(id: string): Promise<MutationResult>
   addSymptom(input: Omit<SymptomLog, 'id'>): Promise<MutationResult>
   updateSymptom(id: string, patch: Partial<Omit<SymptomLog, 'id'>>): Promise<MutationResult>
   removeSymptom(id: string): Promise<MutationResult>
   addSymptomTag(name: string): Promise<MutationResult>
   removeSymptomTag(id: string): Promise<MutationResult>
-  importRecords(
-    payload: ImportPayload,
-  ): Promise<{ result: ImportResult; notifyWarning: string | null }>
-  updateReminder(input: Omit<ReminderRule, 'id'> & { id?: string }): Promise<MutationResult>
   updateSettings(patch: Record<string, string>): Promise<MutationResult>
+  importRecords(payload: ImportPayload): Promise<ImportOutcome>
 }
 
 export function errorMessage(error: unknown): string {
@@ -94,52 +124,76 @@ async function afterWrite(): Promise<string | null> {
   return warnings.length > 0 ? warnings.join('；') : null
 }
 
+/** 把「编辑治疗方案」的入参映射成仓库的 patch 形状（阶段类型比仓库声明更宽松）。 */
+function toLinePatch(line: TreatmentLineDraft): NonNullable<TreatmentPatch['lines']>[number] {
+  const patch = {
+    id: line.id ?? '',
+    medicationId: line.medicationId,
+    label: line.label,
+    isHost: line.isHost,
+    syncWithHost: line.syncWithHost,
+    anchor: line.anchor,
+    windowDays: line.windowDays,
+    phases: line.phases,
+    oral: line.oral,
+  }
+  // phases 的入参是「去掉 id / lineId」的阶段模板，运行时由仓库补 id；类型声明更严，
+  // 这里集中做一次断言，避免在调用点散落 any。
+  return patch as unknown as NonNullable<TreatmentPatch['lines']>[number]
+}
+
 export const useAppStore = create<AppStore>((set) => ({
   ready: false,
   refreshing: false,
   error: null,
-  regimen: null,
-  medication: null,
+  treatment: null,
+  treatments: [],
+  doseLogs: [],
   medications: [],
-  disease: null,
-  diseases: [],
-  injections: [],
   symptoms: [],
   symptomTags: [],
   reminder: null,
   settings: {},
+  diseases: [],
+  disease: null,
 
   reload: async () => {
     set((state) => ({ refreshing: state.ready, error: null }))
     try {
-      const active = await regimenRepo.listActive()
-      const [allSettings, allMedications, allSymptoms, allSymptomTags] = await Promise.all([
+      const [
+        active,
+        allTreatments,
+        allSettings,
+        allMedications,
+        allSymptoms,
+        allSymptomTags,
+        allDoseLogs,
+      ] = await Promise.all([
+        treatmentRepo.getActive(),
+        treatmentRepo.list(),
         settingsRepo.all(),
         medicationRepo.list(),
         symptomRepo.list(),
         symptomTagRepo.list(),
+        doseLogRepo.list(),
       ])
-      const injectionList = await injectionRepo.list(active ? active.id : undefined)
       const reminder = active ? await reminderRules.getFor(active.id) : null
-      const medication = active
-        ? allMedications.find((item) => item.id === active.medicationId) ?? null
-        : null
       const diseases = findDiseases(resolveDiseaseIds(allSettings))
 
       set({
         ready: true,
         refreshing: false,
         error: null,
-        regimen: active,
-        medication,
+        treatment: active,
+        treatments: allTreatments,
+        doseLogs: allDoseLogs,
         medications: allMedications,
-        disease: diseases[0] ?? null,
-        diseases,
-        injections: injectionList,
         symptoms: allSymptoms,
         symptomTags: allSymptomTags,
         reminder,
         settings: allSettings,
+        diseases,
+        disease: diseases[0] ?? null,
       })
     } catch (error) {
       set({ ready: true, refreshing: false, error: errorMessage(error) })
@@ -147,18 +201,78 @@ export const useAppStore = create<AppStore>((set) => ({
     }
   },
 
-  addInjection: async (input) => {
-    await injectionRepo.create(input)
+  addDoseLog: async (input) => {
+    await doseLogRepo.create(input)
     return { notifyWarning: await afterWrite() }
   },
 
-  updateInjection: async (id, patch) => {
-    await injectionRepo.update(id, patch)
+  updateDoseLog: async (id, patch) => {
+    const repoPatch: Partial<DoseLogInput> = { ...patch }
+    delete repoPatch.lineId
+    await doseLogRepo.update(
+      id,
+      repoPatch as Partial<Omit<DoseLog, 'id' | 'lineId' | 'createdAt'>>,
+    )
     return { notifyWarning: await afterWrite() }
   },
 
-  removeInjection: async (id) => {
-    await injectionRepo.remove(id)
+  removeDoseLog: async (id) => {
+    await doseLogRepo.remove(id)
+    return { notifyWarning: await afterWrite() }
+  },
+
+  saveTreatment: async (input) => {
+    if (input.id === undefined) {
+      await treatmentRepo.create({ name: input.name, lines: input.lines })
+    } else {
+      const current = await treatmentRepo.get(input.id)
+      const linePatches = input.lines
+        .filter(
+          (line): line is TreatmentLineDraft & { id: string } =>
+            typeof line.id === 'string' && line.id !== '',
+        )
+        .map(toLinePatch)
+      await treatmentRepo.update(input.id, { name: input.name, lines: linePatches })
+
+      const keptIds = new Set(
+        input.lines
+          .map((line) => line.id)
+          .filter((id): id is string => typeof id === 'string' && id !== ''),
+      )
+      for (const line of current?.lines ?? []) {
+        if (!keptIds.has(line.id)) await treatmentRepo.removeLine(line.id)
+      }
+      for (const draft of input.lines) {
+        if (draft.id === undefined) {
+          await treatmentRepo.addLine(input.id, draft)
+        }
+      }
+    }
+    return { notifyWarning: await afterWrite() }
+  },
+
+  setActiveTreatment: async (id, active) => {
+    await treatmentRepo.setActive(id, active)
+    return { notifyWarning: await afterWrite() }
+  },
+
+  updateReminder: async (input) => {
+    await reminderRules.upsert(input)
+    return { notifyWarning: await afterWrite() }
+  },
+
+  addMedication: async (input) => {
+    await medicationRepo.create(input)
+    return { notifyWarning: await afterWrite() }
+  },
+
+  updateMedication: async (id, patch) => {
+    await medicationRepo.update(id, patch)
+    return { notifyWarning: await afterWrite() }
+  },
+
+  removeMedication: async (id) => {
+    await medicationRepo.remove(id)
     return { notifyWarning: await afterWrite() }
   },
 
@@ -187,20 +301,15 @@ export const useAppStore = create<AppStore>((set) => ({
     return { notifyWarning: await afterWrite() }
   },
 
-  importRecords: async (payload) => {
-    const result = await importPayload(payload)
-    return { result, notifyWarning: await afterWrite() }
-  },
-
-  updateReminder: async (input) => {
-    await reminderRules.upsert(input)
-    return { notifyWarning: await afterWrite() }
-  },
-
   updateSettings: async (patch) => {
     for (const [key, value] of Object.entries(patch)) {
       await settingsRepo.set(key, value)
     }
     return { notifyWarning: await afterWrite() }
+  },
+
+  importRecords: async (payload) => {
+    const result = await importPayload(payload)
+    return { result, notifyWarning: await afterWrite() }
   },
 }))

@@ -1,16 +1,23 @@
 import * as Notifications from 'expo-notifications'
 import { Platform } from 'react-native'
-import { injections, medications, regimens, reminderRules, settings } from '@/db/repo'
-import type { AppSettings, Injection, Medication, Regimen, ReminderRule } from '@/types'
-import { buildSchedule } from '@/domain/schedule'
-import type { DosePlan } from '@/domain/schedule'
+import { doseLogs, medications, reminderRules, settings, treatments } from '@/db/repo'
+import type {
+  AppSettings,
+  DoseLog,
+  Medication,
+  ReminderRuleV5,
+  Treatment,
+  TreatmentLine,
+} from '@/types'
+import { buildSchedule, ORAL_HORIZON_DAYS } from '@/domain/schedule'
+import type { SchedulePlan } from '@/domain/schedule'
 import { buildReminderContent, NOTIFY_PREP_HINT } from './content'
 
 export { NOTIFY_PREP_HINT }
 
 const REMINDER_CHANNEL_ID = 'bioclock-reminders'
 const SCHEDULE_WINDOW_DAYS = 56
-const MAX_SCHEDULED_NOTIFICATIONS = 60
+const MAX_SCHEDULED_NOTIFICATIONS = 200
 const EVENING_CATCH_UP_MINUTES = 20 * 60
 const DEFAULT_REMINDER_MINUTES = 9 * 60
 const DEFAULT_DND_START = '22:00'
@@ -23,7 +30,9 @@ interface DndWindow {
 }
 
 interface ReminderDraft {
-  regimenId: string
+  /** 注射线用计划针所在的 lineId；合并的口服提醒用当天第一条线的 id */
+  lineId: string
+  kind: 'injection' | 'oral'
   plannedAt: number
   triggerAt: number
   title: string
@@ -55,40 +64,59 @@ export async function ensurePermissions(): Promise<{ granted: boolean; exactAlar
 
 /**
  * 清空后按「未来 8 周」重新排程。
+ *
+ * - 注射线：按 `buildSchedule` 的下一针，用 treatment 级 reminderRules 的偏移（提前 N 天 + 当天）。
+ * - 口服线：覆盖未来 14 天的打卡点，每天在 oral.remindTime 提醒；同一天多条口服线合并成一条。
+ *
  * 返回实际写入系统的通知条数（不会超过 60 条）。
  */
 export async function rescheduleAll(): Promise<{ scheduled: number }> {
   await cancelAll()
 
-  const regimen = await regimens.listActive()
-  if (!regimen) return { scheduled: 0 }
+  const treatment = await treatments.getActive()
+  if (!treatment) return { scheduled: 0 }
 
-  const [regimenInjections, reminder, appSettings, medication] = await Promise.all([
-    injections.list(regimen.id),
-    reminderRules.getFor(regimen.id),
+  const [logs, reminder, appSettings, allMedications] = await Promise.all([
+    doseLogs.list(),
+    reminderRules.getFor(treatment.id),
     settings.all(),
-    medications.get(regimen.medicationId),
+    medications.list(),
   ])
-
-  if (!reminder || !reminder.enabled || reminder.offsets.length === 0) {
-    return { scheduled: 0 }
-  }
 
   const now = Date.now()
   const horizon = now + SCHEDULE_WINDOW_DAYS * DAY_MS
-  const plans = collectPlansThrough(regimen, regimenInjections, now, horizon).filter(
-    (plan) => plan.status !== 'done' && plan.plannedAt <= horizon,
-  )
+  const plans = collectPlansThrough(treatment, logs, now, horizon)
+  const medicationById = new Map(allMedications.map((medication) => [medication.id, medication]))
+  const lineById = new Map(treatment.lines.map((line) => [line.id, line]))
+  const dnd = resolveDndWindow(appSettings)
 
-  const drafts = buildDrafts({
-    plans,
-    reminder,
-    medication,
-    regimenId: regimen.id,
-    regimenName: regimen.name,
-    now,
-    dnd: resolveDndWindow(appSettings),
-  })
+  const drafts: ReminderDraft[] = []
+
+  if (reminder && reminder.enabled && reminder.offsets.length > 0) {
+    drafts.push(
+      ...buildInjectionDrafts({
+        plans,
+        lines: lineById,
+        reminder,
+        medicationById,
+        treatmentName: treatment.name,
+        now,
+        horizon,
+        dnd,
+      }),
+    )
+  }
+
+  drafts.push(
+    ...buildOralDrafts({
+      plans,
+      lines: lineById,
+      medicationById,
+      now,
+      horizon,
+      dnd,
+    }),
+  )
 
   drafts.sort((a, b) => a.triggerAt - b.triggerAt || a.plannedAt - b.plannedAt)
   const limited = drafts.slice(0, MAX_SCHEDULED_NOTIFICATIONS)
@@ -106,53 +134,55 @@ export async function cancelAll(): Promise<void> {
 
 /**
  * 契约中的 buildSchedule 只返回「历史 + 未来 2 针」，不足以覆盖 8 周。
- * 若末尾计划还没到 horizon，则以 horizon 为 now 再取一次，并按稳定的 index 合并。
+ * 若末尾计划还没到 horizon，则以 horizon 为 now 再取一次，并按 (lineId, index) 合并。
  */
 function collectPlansThrough(
-  regimen: Regimen,
-  regimenInjections: Injection[],
+  treatment: Treatment,
+  logs: DoseLog[],
   now: number,
   horizon: number,
-): DosePlan[] {
-  const plans = buildSchedule({ regimen, injections: regimenInjections, now })
-  const last = plans[plans.length - 1]
-  if (!last || last.plannedAt >= horizon) return plans
-
-  const extended = buildSchedule({ regimen, injections: regimenInjections, now: horizon })
-  const byIndex = new Map<number, DosePlan>()
-  for (const plan of plans) byIndex.set(plan.index, plan)
-  for (const plan of extended) {
-    if (!byIndex.has(plan.index)) byIndex.set(plan.index, plan)
-  }
-  return Array.from(byIndex.values()).sort((a, b) => a.index - b.index)
+): SchedulePlan[] {
+  const horizonDays = Math.max(
+    ORAL_HORIZON_DAYS,
+    Math.ceil((horizon - now) / DAY_MS) + ORAL_HORIZON_DAYS,
+  )
+  return buildSchedule({ lines: treatment.lines, logs, now, horizonDays })
 }
 
-function buildDrafts(input: {
-  plans: ReturnType<typeof buildSchedule>
-  reminder: ReminderRule
-  medication: Medication | null
-  regimenId: string
-  regimenName: string
+function buildInjectionDrafts(input: {
+  plans: SchedulePlan[]
+  lines: Map<string, TreatmentLine>
+  reminder: ReminderRuleV5
+  medicationById: Map<string, Medication>
+  treatmentName: string
   now: number
+  horizon: number
   dnd: DndWindow
 }): ReminderDraft[] {
-  const { plans, reminder, medication, regimenId, regimenName, now, dnd } = input
+  const { plans, lines, reminder, medicationById, treatmentName, now, horizon, dnd } = input
   const reminderMinutes = parseTimeOfDay(reminder.timeOfDay, DEFAULT_REMINDER_MINUTES)
-  const offsets = Array.from(new Set(reminder.offsets.filter((offset) => Number.isInteger(offset)))).sort(
-    (a, b) => a - b,
-  )
-  const medicationName = medication?.name ?? regimenName
-  const route = medication?.route ?? 'sc'
+  const offsets = Array.from(
+    new Set(reminder.offsets.filter((offset) => Number.isInteger(offset))),
+  ).sort((a, b) => a - b)
 
   const drafts: ReminderDraft[] = []
   const seen = new Set<string>()
 
   for (const plan of plans) {
+    if (plan.kind !== 'injection') continue
+    if (plan.status === 'done') continue
+
+    const line = lines.get(plan.lineId)
+    const medication = line ? medicationById.get(line.medicationId) ?? null : null
+    const medicationName = medication?.name ?? line?.label ?? treatmentName
+    // 注射线只可能是皮下或静脉；口服线不走这里。
+    const route: 'sc' | 'iv' = medication?.route === 'iv' ? 'iv' : 'sc'
+
     for (const offset of offsets) {
       const day = addLocalDays(plan.plannedAt, offset)
       const rawTriggerAt = atLocalMinutes(day, reminderMinutes)
       const triggerAt = shiftOutOfDnd(rawTriggerAt, dnd)
-      if (triggerAt <= now || !claimDraftKey(seen, plan.plannedAt, triggerAt)) continue
+      if (triggerAt <= now || !claimDraftKey(seen, plan.lineId, plan.plannedAt, triggerAt)) continue
 
       const content = buildReminderContent({
         medicationName,
@@ -162,7 +192,8 @@ function buildDrafts(input: {
         route,
       })
       drafts.push({
-        regimenId,
+        lineId: plan.lineId,
+        kind: 'injection',
         plannedAt: plan.plannedAt,
         triggerAt,
         title: content.title,
@@ -174,7 +205,7 @@ function buildDrafts(input: {
     if (offsets.includes(0)) {
       const rawTriggerAt = atLocalMinutes(plan.plannedAt, EVENING_CATCH_UP_MINUTES)
       const triggerAt = shiftOutOfDnd(rawTriggerAt, dnd)
-      if (triggerAt > now && claimDraftKey(seen, plan.plannedAt, triggerAt)) {
+      if (triggerAt > now && claimDraftKey(seen, plan.lineId, plan.plannedAt, triggerAt)) {
         const content = buildReminderContent({
           medicationName,
           dose: plan.dose,
@@ -184,8 +215,9 @@ function buildDrafts(input: {
           route,
         })
         drafts.push({
-          regimenId,
-          plannedAt: plan.plannedAt,
+        lineId: plan.lineId,
+        kind: 'injection',
+        plannedAt: plan.plannedAt,
           triggerAt,
           title: content.title,
           body: content.body,
@@ -195,6 +227,85 @@ function buildDrafts(input: {
   }
 
   return drafts
+}
+
+interface OralDayGroup {
+  day: number
+  lineIds: string[]
+  names: string[]
+  remindMinutes: number
+}
+
+/** 口服线：按本地日分组，同一天合并成一条通知（取当天最早的提醒时间）。 */
+function buildOralDrafts(input: {
+  plans: SchedulePlan[]
+  lines: Map<string, TreatmentLine>
+  medicationById: Map<string, Medication>
+  now: number
+  horizon: number
+  dnd: DndWindow
+}): ReminderDraft[] {
+  const { plans, lines, medicationById, now, horizon, dnd } = input
+  const byDay = new Map<string, OralDayGroup>()
+
+  for (const plan of plans) {
+    if (plan.kind !== 'oral') continue
+    if (plan.status === 'done' || plan.status === 'missed') continue
+    if (plan.plannedAt > horizon) continue
+
+    const line = lines.get(plan.lineId)
+    if (!line || !line.oral) continue
+
+    const day = startOfLocalDay(plan.plannedAt)
+    const remindMinutes = parseTimeOfDay(line.oral.remindTime, DEFAULT_REMINDER_MINUTES)
+    const key = `${day}|${remindMinutes}`
+    const medication = medicationById.get(line.medicationId)
+    const name = medication?.name ?? line.label
+
+    const existing = byDay.get(key)
+    if (existing) {
+      if (!existing.lineIds.includes(plan.lineId)) existing.lineIds.push(plan.lineId)
+      if (!existing.names.includes(name)) existing.names.push(name)
+    } else {
+      byDay.set(key, { day, lineIds: [plan.lineId], names: [name], remindMinutes })
+    }
+  }
+
+  const drafts: ReminderDraft[] = []
+  for (const group of byDay.values()) {
+    const rawTriggerAt = atLocalMinutes(group.day, group.remindMinutes)
+    const triggerAt = shiftOutOfDnd(rawTriggerAt, dnd)
+    if (triggerAt <= now) continue
+
+    const content = buildOralContent(group.names)
+    drafts.push({
+      lineId: group.lineIds[0],
+      kind: 'oral',
+      plannedAt: group.day,
+      triggerAt,
+      title: content.title,
+      body: content.body,
+    })
+  }
+  return drafts
+}
+
+/** 口服提醒文案：只描述「该服药了」，不做任何剂量或用药建议。 */
+function buildOralContent(names: string[]): { title: string; body: string } {
+  const unique = names.map((name) => name.trim()).filter((name) => name !== '')
+  if (unique.length === 0) {
+    return { title: '今天该服药了', body: '按医嘱服用即可，完成后记得回来打卡。' }
+  }
+  if (unique.length === 1) {
+    return {
+      title: `今天该服用${unique[0]}`,
+      body: '按医嘱服用即可，完成后记得回来打卡。',
+    }
+  }
+  return {
+    title: `今天有 ${unique.length} 种口服药`,
+    body: `${unique.join('、')}。按医嘱服用，完成后记得回来打卡。`,
+  }
 }
 
 async function scheduleDraft(draft: ReminderDraft): Promise<void> {
@@ -210,7 +321,8 @@ async function scheduleDraft(draft: ReminderDraft): Promise<void> {
       body: draft.body,
       data: {
         type: 'dose',
-        regimenId: draft.regimenId,
+        kind: draft.kind,
+        lineId: draft.lineId,
         plannedAt: draft.plannedAt,
       },
     },
@@ -292,8 +404,19 @@ function addLocalDays(timestamp: number, days: number): number {
   return date.getTime()
 }
 
-function claimDraftKey(seen: Set<string>, plannedAt: number, triggerAt: number): boolean {
-  const key = `${plannedAt}|${triggerAt}`
+function startOfLocalDay(timestamp: number): number {
+  const date = new Date(timestamp)
+  date.setHours(0, 0, 0, 0)
+  return date.getTime()
+}
+
+function claimDraftKey(
+  seen: Set<string>,
+  lineId: string,
+  plannedAt: number,
+  triggerAt: number,
+): boolean {
+  const key = `${lineId}|${plannedAt}|${triggerAt}`
   if (seen.has(key)) return false
   seen.add(key)
   return true

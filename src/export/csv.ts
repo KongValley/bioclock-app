@@ -1,10 +1,9 @@
 import { File, Paths } from 'expo-file-system'
-import { injections, medications, regimens } from '@/db/repo'
-import type { Injection, Regimen } from '@/types'
+import { doseLogs, medications, treatments } from '@/db/repo'
+import type { DoseLog, TreatmentLine } from '@/types'
 import { buildSchedule } from '@/domain/schedule'
+import type { SchedulePlan } from '@/domain/schedule'
 import { SITE_LABELS } from '@/domain/rotation'
-
-const DAY_MS = 24 * 60 * 60 * 1000
 
 const CSV_HEADERS = [
   '注射日期时间',
@@ -19,42 +18,48 @@ const CSV_HEADERS = [
   '偏差天数',
 ]
 
-interface PlanMatch {
-  actualAt: number
-  plannedAt: number
-  deviationDays: number
-}
-
 /**
- * 导出全部注射记录为 CSV。
+ * 导出全部注射记录为 CSV（含 skipped / missed，只取注射线）。
  * 文件以 UTF-8 BOM 开头，Excel 打开中文不乱码。
+ * 计划时间 / 偏差由 `buildSchedule` 把记录配到计划上得到。
  */
 export async function exportCsv(): Promise<{ path: string; filename: string }> {
-  const [allInjections, allMedications, allRegimens] = await Promise.all([
-    injections.list(),
+  const [allTreatments, allMedications, allLogs] = await Promise.all([
+    treatments.list(),
     medications.list(),
-    regimens.list(),
+    doseLogs.list(),
   ])
 
   const medicationById = new Map(allMedications.map((medication) => [medication.id, medication]))
-  const pendingPlans = indexDonePlans(allRegimens, allInjections)
+  const lineById = new Map<string, TreatmentLine>()
+  for (const treatment of allTreatments) {
+    for (const line of treatment.lines) lineById.set(line.id, line)
+  }
+
+  const planByLogId = indexPlansByLog(allTreatments, allLogs)
+
+  const rows = allLogs
+    .filter((log) => lineById.get(log.lineId)?.kind === 'injection')
+    .sort((a, b) => logTime(a) - logTime(b))
 
   const lines: string[][] = [CSV_HEADERS]
-  for (const injection of allInjections) {
-    const medication = medicationById.get(injection.medicationId)
-    const plan = takePlanMatch(pendingPlans, injection)
+  for (const log of rows) {
+    const line = lineById.get(log.lineId)
+    const medication = line ? medicationById.get(line.medicationId) : undefined
+    const plan = planByLogId.get(log.id)
+    const isInfusion = medication?.route === 'iv'
 
     lines.push([
-      formatLocalDateTime(injection.injectedAt),
-      medication?.name ?? '',
+      formatLocalDateTime(logTime(log)),
+      medication?.name ?? line?.label ?? '',
       medication?.genericName ?? '',
-      injection.dose === null ? '' : String(injection.dose),
-      injection.unit,
-      SITE_LABELS[injection.site] ?? '',
-      injection.lotNumber ?? '',
-      injection.note ?? '',
+      log.dose === null ? '' : String(log.dose),
+      log.unit || medication?.unit || '',
+      isInfusion || !log.site ? '' : SITE_LABELS[log.site] ?? '',
+      log.lotNumber ?? '',
+      log.note ?? '',
       plan ? formatLocalDateTime(plan.plannedAt) : '',
-      plan ? plan.deviationDays.toFixed(1) : '',
+      plan && plan.deviationDays !== undefined ? plan.deviationDays.toFixed(1) : '',
     ])
   }
 
@@ -68,63 +73,24 @@ export async function exportCsv(): Promise<{ path: string; filename: string }> {
   return { path: file.uri, filename }
 }
 
-/**
- * 每个方案的计划与实际记录一一对应。
- * 契约中 buildSchedule 会返回历史全部 + 未来 2 针，这里只取已完成的部分。
- */
-function indexDonePlans(
-  allRegimens: Regimen[],
-  allInjections: Injection[],
-): Map<string, PlanMatch[]> {
-  const injectionsByRegimen = new Map<string, Injection[]>()
-  for (const injection of allInjections) {
-    const list = injectionsByRegimen.get(injection.regimenId)
-    if (list) {
-      list.push(injection)
-    } else {
-      injectionsByRegimen.set(injection.regimenId, [injection])
+/** 每个 treatment 跑一次 buildSchedule，把 plan 按 doseLogId 建索引。 */
+function indexPlansByLog(
+  allTreatments: Array<{ lines: TreatmentLine[] }>,
+  allLogs: DoseLog[],
+): Map<string, SchedulePlan> {
+  const now = Date.now()
+  const result = new Map<string, SchedulePlan>()
+  for (const treatment of allTreatments) {
+    const plans = buildSchedule({ lines: treatment.lines, logs: allLogs, now })
+    for (const plan of plans) {
+      if (plan.doseLogId) result.set(plan.doseLogId, plan)
     }
   }
-
-  const result = new Map<string, PlanMatch[]>()
-  const now = Date.now()
-
-  for (const regimen of allRegimens) {
-    const regimenInjections = injectionsByRegimen.get(regimen.id) ?? []
-    const plans = buildSchedule({ regimen, injections: regimenInjections, now })
-      .filter((plan) => plan.status === 'done' && plan.actualAt !== undefined)
-      .map((plan) => {
-        const actualAt = plan.actualAt ?? plan.plannedAt
-        return {
-          actualAt,
-          plannedAt: plan.plannedAt,
-          deviationDays:
-            plan.deviationDays ?? roundOne((actualAt - plan.plannedAt) / DAY_MS),
-        }
-      })
-      .sort((a, b) => a.plannedAt - b.plannedAt)
-    result.set(regimen.id, plans)
-  }
-
   return result
 }
 
-function takePlanMatch(
-  pendingPlans: Map<string, PlanMatch[]>,
-  injection: Injection,
-): PlanMatch | null {
-  const plans = pendingPlans.get(injection.regimenId)
-  if (!plans || plans.length === 0) return null
-
-  const position = plans.findIndex((plan) => plan.actualAt === injection.injectedAt)
-  if (position < 0) return null
-
-  const [match] = plans.splice(position, 1)
-  return match
-}
-
-function roundOne(value: number): number {
-  return Math.round(value * 10) / 10
+function logTime(log: DoseLog): number {
+  return log.takenAt ?? log.scheduledAt ?? log.createdAt
 }
 
 function escapeCsvField(value: string): string {

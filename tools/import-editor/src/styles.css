@@ -193,6 +193,57 @@ textarea:focus-visible,
   outline-offset: 2px;
 }
 
+/* 自定义药物 chip：只读文字 + 右侧删除按钮（移动端留够 44px 点按区域） */
+.chip.is-static {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  padding: 4px 6px 4px 14px;
+  cursor: default;
+  color: var(--text);
+  background: var(--surface-muted);
+}
+
+.chip.is-static:hover {
+  border-color: var(--border);
+}
+
+.chip-remove {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.chip-remove::after {
+  content: '';
+  position: absolute;
+  inset: -5px;
+  border-radius: inherit;
+}
+
+.chip-remove:hover {
+  background: var(--surface);
+  color: var(--danger);
+}
+
+.empty-inline {
+  display: block;
+  padding: 10px 2px;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
 .tabs {
   display: flex;
   gap: 4px;
@@ -472,6 +523,11 @@ button {
 }
 
 .is-hidden {
+  display: none !important;
+}
+
+/* .primary / .secondary 用了 display: inline-flex，会盖掉 UA 的 [hidden]，这里补回来 */
+[hidden] {
   display: none !important;
 }
 

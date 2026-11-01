@@ -8,14 +8,15 @@ const samplePath = fileURLToPath(
 )
 
 describe('导入工具的示例文件', () => {
-  it('示例 JSON 能被 App 的解析器接受', () => {
+  it('v2 示例 JSON 能被 App 的解析器接受', () => {
     const payload = parseImportJson(readFileSync(samplePath, 'utf8'))
+    expect(payload.medications).toHaveLength(2)
+    expect(payload.medications.some((medication) => medication.route === 'oral')).toBe(true)
     expect(payload.injections).toHaveLength(2)
+    expect(payload.oralLogs).toHaveLength(2)
     expect(payload.symptoms).toHaveLength(1)
     expect(payload.injections[0].medicationName).toBe('阿达木单抗')
     expect(payload.symptoms[0].tags).toContain('发热')
-    expect(payload.symptoms[0].injectionAt).toBe(
-      parseImportJson(readFileSync(samplePath, 'utf8')).injections[1].injectedAt,
-    )
+    expect(payload.symptoms[0].injectionAt).toBe(payload.injections[1].injectedAt)
   })
 })

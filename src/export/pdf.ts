@@ -1,8 +1,9 @@
 import { File, Paths } from 'expo-file-system'
 import { printToFileAsync } from 'expo-print'
-import { injections, medications, regimens, settings, symptoms } from '@/db/repo'
-import type { Injection, Medication, Regimen, SymptomLog } from '@/types'
-import { buildSchedule } from '@/domain/schedule'
+import { doseLogs, medications, settings, symptoms, treatments } from '@/db/repo'
+import type { DoseLog, LineKind, Medication, SymptomLog, TreatmentLine } from '@/types'
+import { computeAdherence } from '@/domain/adherence'
+import type { AdherenceStats } from '@/domain/adherence'
 import { SITE_LABELS } from '@/domain/rotation'
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -10,12 +11,18 @@ const DEFAULT_RANGE_DAYS = 180
 const DISCLAIMER =
   '本报告由患者自行记录生成，仅用于就诊沟通，不构成医疗诊断或用药建议。'
 
-interface AdherenceSummary {
-  total: number
-  onTime: number
-  early: number
-  late: number
-  avgDeviationDays: number
+interface LineSummary {
+  label: string
+  kind: LineKind
+  /** 注射线：已完成针数；口服线：已完成打卡数 */
+  done: number
+  /** 注射线才有 */
+  onTime: number | null
+  missed: number
+  /** 注射线才有 */
+  avgDeviationDays: number | null
+  /** 完成率 0–1 */
+  rate: number
 }
 
 interface SymptomSummary {
@@ -36,33 +43,45 @@ export async function exportPdf(
   const now = Date.now()
   const since = now - rangeDays * DAY_MS
 
-  const [allInjections, allMedications, allSymptoms, allRegimens, appSettings] = await Promise.all([
-    injections.list(),
+  const [allTreatments, allMedications, allSymptoms, allLogs, appSettings] = await Promise.all([
+    treatments.list(),
     medications.list(),
     symptoms.list(),
-    regimens.list(),
+    doseLogs.list(),
     settings.all(),
   ])
 
   const patientName = opts.patientName?.trim() || appSettings.patient_name?.trim() || ''
   const medicationById = new Map(allMedications.map((medication) => [medication.id, medication]))
-  const rangeInjections = allInjections.filter(
-    (injection) => injection.injectedAt >= since && injection.injectedAt <= now,
-  )
+  const lineById = new Map<string, TreatmentLine>()
+  for (const treatment of allTreatments) {
+    for (const line of treatment.lines) lineById.set(line.id, line)
+  }
+
+  const reportLogs = allLogs
+    .filter((log) => lineById.get(log.lineId)?.kind === 'injection')
+    .filter((log) => {
+      const time = logTime(log)
+      return time >= since && time <= now
+    })
+    .sort((a, b) => logTime(a) - logTime(b))
+
   const rangeSymptoms = allSymptoms.filter(
     (symptom) => symptom.loggedAt >= since && symptom.loggedAt <= now,
   )
 
-  const adherence = summarizeAdherence(allRegimens, allInjections, since, now)
+  const { stats, rows } = summarizeAdherence(allTreatments, allLogs, lineById, now)
   const symptomSummary = summarizeSymptoms(rangeSymptoms)
   const html = buildHtml({
     patientName,
     rangeDays,
     since,
     now,
-    injections: rangeInjections,
+    logs: reportLogs,
+    lineById,
     medicationById,
-    adherence,
+    adherence: stats,
+    lineSummaries: rows,
     symptomSummary,
   })
 
@@ -83,50 +102,45 @@ function resolveRangeDays(value: number | undefined): number {
   return Math.floor(value)
 }
 
+function logTime(log: DoseLog): number {
+  return log.takenAt ?? log.scheduledAt ?? log.createdAt
+}
+
 function summarizeAdherence(
-  allRegimens: Regimen[],
-  allInjections: Injection[],
-  since: number,
+  allTreatments: Array<{ lines: TreatmentLine[] }>,
+  allLogs: DoseLog[],
+  lineById: Map<string, TreatmentLine>,
   now: number,
-): AdherenceSummary {
-  let total = 0
-  let onTime = 0
-  let early = 0
-  let late = 0
-  let deviationSum = 0
+): { stats: AdherenceStats; rows: LineSummary[] } {
+  const lines = allTreatments.flatMap((treatment) => treatment.lines)
+  const stats = computeAdherence(lines, allLogs, now)
 
-  for (const regimen of allRegimens) {
-    const regimenInjections = allInjections.filter(
-      (injection) => injection.regimenId === regimen.id,
-    )
-    const plans = buildSchedule({ regimen, injections: regimenInjections, now })
-
-    for (const plan of plans) {
-      if (plan.status !== 'done' || plan.actualAt === undefined) continue
-      if (plan.actualAt < since || plan.actualAt > now) continue
-
-      const deviationDays =
-        plan.deviationDays ?? roundOne((plan.actualAt - plan.plannedAt) / DAY_MS)
-      total += 1
-      deviationSum += deviationDays
-
-      if (Math.abs(deviationDays) <= regimen.windowDays) {
-        onTime += 1
-      } else if (deviationDays < 0) {
-        early += 1
-      } else {
-        late += 1
+  const rows: LineSummary[] = stats.byLine.map((entry) => {
+    const label = lineById.get(entry.lineId)?.label ?? entry.lineId
+    if (entry.kind === 'oral') {
+      return {
+        label,
+        kind: 'oral',
+        done: entry.total,
+        onTime: null,
+        missed: entry.missed,
+        avgDeviationDays: null,
+        rate: entry.rate,
       }
     }
-  }
+    const denominator = entry.total + entry.missed
+    return {
+      label,
+      kind: 'injection',
+      done: entry.total,
+      onTime: entry.onTime,
+      missed: entry.missed,
+      avgDeviationDays: entry.avgDeviationDays,
+      rate: denominator > 0 ? round2(entry.total / denominator) : 0,
+    }
+  })
 
-  return {
-    total,
-    onTime,
-    early,
-    late,
-    avgDeviationDays: total === 0 ? 0 : roundOne(deviationSum / total),
-  }
+  return { stats, rows }
 }
 
 function summarizeSymptoms(logs: SymptomLog[]): SymptomSummary {
@@ -157,8 +171,8 @@ function summarizeSymptoms(logs: SymptomLog[]): SymptomSummary {
 
   return {
     count: logs.length,
-    avgSeverity: roundOne(severitySum / logs.length),
-    avgPain: painScores.length === 0 ? null : roundOne(painSum / painScores.length),
+    avgSeverity: round1(severitySum / logs.length),
+    avgPain: painScores.length === 0 ? null : round1(painSum / painScores.length),
     mostCommonTag,
   }
 }
@@ -168,9 +182,11 @@ function buildHtml(input: {
   rangeDays: number
   since: number
   now: number
-  injections: Injection[]
+  logs: DoseLog[]
+  lineById: Map<string, TreatmentLine>
   medicationById: Map<string, Medication>
-  adherence: AdherenceSummary
+  adherence: AdherenceStats
+  lineSummaries: LineSummary[]
   symptomSummary: SymptomSummary
 }): string {
   const {
@@ -178,30 +194,54 @@ function buildHtml(input: {
     rangeDays,
     since,
     now,
-    injections: reportInjections,
+    logs: reportLogs,
+    lineById,
     medicationById,
     adherence,
+    lineSummaries,
     symptomSummary,
   } = input
 
   const injectionRows =
-    reportInjections.length === 0
+    reportLogs.length === 0
       ? '<tr><td class="empty" colspan="7">该时间范围内暂无注射记录</td></tr>'
-      : reportInjections
-          .map((injection) => {
-            const medication = medicationById.get(injection.medicationId)
+      : reportLogs
+          .map((log) => {
+            const line = lineById.get(log.lineId)
+            const medication = line ? medicationById.get(line.medicationId) : undefined
             const isInfusion = medication?.route === 'iv'
-            const site = isInfusion
-              ? '—'
-              : (SITE_LABELS[injection.site] ?? '—')
+            const site = isInfusion ? '—' : log.site ? SITE_LABELS[log.site] ?? '—' : '—'
             return `<tr>
-              <td class="nowrap">${escapeHtml(formatLocalDateTime(injection.injectedAt))}</td>
-              <td>${escapeHtml(medication?.name ?? '—')}</td>
+              <td class="nowrap">${escapeHtml(formatLocalDateTime(logTime(log)))}</td>
+              <td>${escapeHtml(medication?.name ?? line?.label ?? '—')}</td>
               <td>${escapeHtml(medication?.genericName ?? '—')}</td>
-              <td class="nowrap">${escapeHtml(formatDose(injection))}</td>
+              <td class="nowrap">${escapeHtml(formatDose(log, medication))}</td>
               <td>${escapeHtml(site)}</td>
-              <td>${escapeHtml(injection.lotNumber ?? '—')}</td>
-              <td class="note">${escapeHtml(injection.note ?? '—')}</td>
+              <td>${escapeHtml(log.lotNumber ?? '—')}</td>
+              <td class="note">${escapeHtml(log.note ?? '—')}</td>
+            </tr>`
+          })
+          .join('')
+
+  const lineRows =
+    lineSummaries.length === 0
+      ? '<tr><td class="empty" colspan="7">暂无用药线</td></tr>'
+      : lineSummaries
+          .map((row) => {
+            const kindLabel = row.kind === 'oral' ? '口服' : '注射'
+            const onTime = row.kind === 'injection' ? String(row.onTime ?? 0) : '—'
+            const deviation =
+              row.avgDeviationDays === null
+                ? '—'
+                : `${row.avgDeviationDays > 0 ? '+' : ''}${row.avgDeviationDays.toFixed(1)} 天`
+            return `<tr>
+              <td>${escapeHtml(row.label)}</td>
+              <td class="nowrap">${kindLabel}</td>
+              <td>${row.done}</td>
+              <td>${onTime}</td>
+              <td>${row.missed}</td>
+              <td class="nowrap">${deviation}</td>
+              <td>${Math.round(row.rate * 100)}%</td>
             </tr>`
           })
           .join('')
@@ -298,7 +338,7 @@ function buildHtml(input: {
     </div>
     <div class="meta-item">
       <span class="meta-label">注射记录</span>
-      <span>${reportInjections.length} 条</span>
+      <span>${reportLogs.length} 条</span>
     </div>
   </div>
 
@@ -348,8 +388,32 @@ function buildHtml(input: {
       <div class="stat"><span class="stat-label">提前</span><span class="stat-value">${adherence.early}</span></div>
       <div class="stat"><span class="stat-label">延迟</span><span class="stat-value">${adherence.late}</span></div>
       <div class="stat"><span class="stat-label">平均偏差</span><span class="stat-value">${deviationLabel}</span></div>
+      <div class="stat"><span class="stat-label">整体完成率</span><span class="stat-value">${Math.round(adherence.rate * 100)}%</span></div>
     </div>
-    <p class="hint">按时指实际注射时间与计划时间的偏差不超过方案设定的窗口天数；偏差为负数表示提前。</p>
+    <table style="margin-top: 12px;">
+      <colgroup>
+        <col style="width: 26%" />
+        <col style="width: 10%" />
+        <col style="width: 12%" />
+        <col style="width: 10%" />
+        <col style="width: 10%" />
+        <col style="width: 16%" />
+        <col style="width: 16%" />
+      </colgroup>
+      <thead>
+        <tr>
+          <th>用药线</th>
+          <th>方式</th>
+          <th>已完成</th>
+          <th>按时</th>
+          <th>漏用</th>
+          <th>平均偏差</th>
+          <th>完成率</th>
+        </tr>
+      </thead>
+      <tbody>${lineRows}</tbody>
+    </table>
+    <p class="hint">按时指实际注射时间与计划时间的偏差不超过方案设定的窗口天数；偏差为负数表示提前。口服线按打卡完成率统计。</p>
   </section>
 
   <footer>${DISCLAIMER}</footer>
@@ -357,13 +421,20 @@ function buildHtml(input: {
 </html>`
 }
 
-function formatDose(injection: Injection): string {
-  if (injection.dose === null) return '—'
-  return `${injection.dose} ${injection.unit}`.trim()
+function formatDose(log: DoseLog, medication: Medication | undefined): string {
+  if (log.dose === null) return '—'
+  const unit = log.unit || medication?.unit || ''
+  return `${log.dose} ${unit}`.trim()
 }
 
-function roundOne(value: number): number {
-  return Math.round(value * 10) / 10
+function round1(value: number): number {
+  const rounded = Math.round(value * 10) / 10
+  return Object.is(rounded, -0) ? 0 : rounded
+}
+
+function round2(value: number): number {
+  const rounded = Math.round(value * 100) / 100
+  return Object.is(rounded, -0) ? 0 : rounded
 }
 
 function escapeHtml(value: string): string {

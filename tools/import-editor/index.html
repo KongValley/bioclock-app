@@ -14,7 +14,7 @@
           <span class="brand-mark" aria-hidden="true">✚</span>
           <div>
             <h1>BioClock 导入编辑器</h1>
-            <p>补录注射与症状，导出成 App 可以导入的 JSON 文件。</p>
+            <p>补录注射、口服打卡与症状，导出成 App 可以导入的文件。</p>
           </div>
         </div>
         <a class="ghost-link" href="https://github.com/KongValley/bioclock-app" target="_blank" rel="noreferrer">
@@ -27,8 +27,8 @@
       <section class="card intro">
         <h2>怎么用</h2>
         <ol class="steps">
-          <li>在下面按时间顺序补录注射和症状，点「添加」；也可以下载 Excel 模板，在 Excel 里填。</li>
-          <li>点「下载 Excel」或「下载 JSON」，把文件发到手机（微信文件传输/数据线都行）。</li>
+          <li>先选病种、补上目录里没有的药，再按时间顺序补录注射、口服打卡和症状，点「添加」；也可以下载 Excel 模板在 Excel 里填。</li>
+          <li>点「下载 Excel」或「下载 JSON」：自定义药物会一起打包进文件，再把文件发到手机（微信文件传输/数据线都行）。</li>
           <li>手机上打开 BioClock → 设置 → 导入数据 → 选择这个文件。</li>
         </ol>
         <p class="note">
@@ -47,7 +47,51 @@
 
       <section class="card">
         <div class="card-head">
-          <h2>2. 补录记录</h2>
+          <h2>2. 我的药物</h2>
+          <p class="hint">目录里没有的药（国产仿制药、口服药等）在这里加，导出时会随文件带给 App。</p>
+        </div>
+        <div id="custom-drug-list" class="chips" role="list" aria-label="自定义药物"></div>
+        <form id="drug-form" class="form-grid">
+          <label class="field">
+            <span>药名 <b>*</b></span>
+            <input type="text" id="drug-name" placeholder="例如：甲氨蝶呤" required />
+          </label>
+          <label class="field">
+            <span>通用名</span>
+            <input type="text" id="drug-generic" placeholder="通用名" />
+          </label>
+          <label class="field">
+            <span>商品名</span>
+            <input type="text" id="drug-brand" placeholder="多个用顿号分隔" />
+          </label>
+          <label class="field">
+            <span>给药途径</span>
+            <select id="drug-route">
+              <option value="sc">皮下注射</option>
+              <option value="iv">医院输注</option>
+              <option value="oral">口服</option>
+            </select>
+          </label>
+          <div class="field-pair">
+            <label class="field">
+              <span>默认剂量</span>
+              <input type="number" id="drug-dose" step="any" min="0" placeholder="10" />
+            </label>
+            <label class="field">
+              <span>单位</span>
+              <input type="text" id="drug-unit" placeholder="mg" />
+            </label>
+          </div>
+          <div class="form-actions field-wide">
+            <button type="submit" class="secondary" id="drug-submit">添加药物</button>
+            <span id="drug-error" class="error" role="status"></span>
+          </div>
+        </form>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>3. 补录记录</h2>
           <p class="hint">时间按本地时间填写，App 里会原样保存。</p>
         </div>
 
@@ -57,6 +101,9 @@
           </button>
           <button class="tab" role="tab" aria-selected="false" data-tab="symptom" type="button">
             症状记录 <span id="symptom-count" class="pill">0</span>
+          </button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="oral" type="button">
+            口服打卡 <span id="oral-count" class="pill">0</span>
           </button>
         </div>
 
@@ -166,12 +213,59 @@
 
           <ul id="symptom-list" class="record-list" aria-live="polite"></ul>
         </div>
+
+        <div id="panel-oral" class="panel" hidden>
+          <form id="oral-form" class="form-grid" novalidate>
+            <label class="field">
+              <span>记录时间 <b>*</b></span>
+              <input type="datetime-local" id="oral-time" required />
+            </label>
+
+            <label class="field">
+              <span>药物 <b>*</b></span>
+              <select id="oral-drug" required></select>
+            </label>
+
+            <label class="field">
+              <span>状态</span>
+              <select id="oral-status">
+                <option value="done">完成</option>
+                <option value="skipped">跳过</option>
+                <option value="missed">漏服</option>
+              </select>
+            </label>
+
+            <div class="field-pair">
+              <label class="field">
+                <span>剂量</span>
+                <input type="number" id="oral-dose" step="any" min="0" placeholder="10" />
+              </label>
+              <label class="field">
+                <span>单位</span>
+                <input type="text" id="oral-unit" placeholder="mg" />
+              </label>
+            </div>
+
+            <label class="field field-wide">
+              <span>备注</span>
+              <textarea id="oral-note" rows="2" placeholder="早餐后、漏服原因等"></textarea>
+            </label>
+
+            <div class="form-actions field-wide">
+              <button type="submit" class="primary" id="oral-submit">添加口服打卡</button>
+              <button type="button" class="secondary" id="oral-cancel" hidden>取消编辑</button>
+              <span id="oral-error" class="error" role="status"></span>
+            </div>
+          </form>
+
+          <ul id="oral-list" class="record-list" aria-live="polite"></ul>
+        </div>
       </section>
 
       <section class="card">
         <div class="card-head">
-          <h2>3. 导出并导入手机</h2>
-          <p class="hint">导出的 JSON 只包含你刚填的这几条记录；App 会自动跳过重复项。</p>
+          <h2>4. 导出并导入手机</h2>
+          <p class="hint">导出的文件只包含你刚填的记录和自定义药物；App 会自动跳过重复项。</p>
         </div>
 
         <div class="output-actions">

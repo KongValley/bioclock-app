@@ -381,3 +381,282 @@ export interface SymptomTag {
   createdAt: number
 }
 ```
+
+---
+
+# 补充 v5：治疗组合与口服用药
+
+`SCHEMA_VERSION = 5`。本小节**取代 v3 及之前关于 `regimen / regimen_phase / injection` 的约定**：
+旧模型已从数据库删除，`src/types.ts` 顶部的 `Regimen`、`RegimenPhase`、`Injection` 等类型只作历史保留，
+不再有对应表和仓库 API；v3 的 `symptom_log.pain_score` 与 `symptom_tag` 继续有效。
+
+## 设计变化
+
+| v3 / 更早 | v5 |
+| --- | --- |
+| 一个 `regimen` 只对应一种药 | 一个 `treatment` 是一个治疗组合，可同时有多条注射线和口服线 |
+| `injection` 表记录注射 | `dose_log` 统一记录注射与口服打卡 |
+| `regimen_phase` | `treatment_phase`，挂在 `treatment_line` 上 |
+| `reminder_rule.regimen_id` | `reminder_rule.treatment_id` |
+| 药物只有 `route: sc \| iv` | `route: 'sc' \| 'iv' \| 'oral'`，新增 `brand_names`、`extra` |
+| `symptom_log.injection_id` | `symptom_log.dose_log_id`（对外类型字段仍叫 `injectionId`） |
+
+## 表结构
+
+### `medication`
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | `TEXT PK` | `crypto.randomUUID()` |
+| `name` | `TEXT NOT NULL` | 药名 |
+| `generic_name` | `TEXT` | 通用名 |
+| `brand_names` | `TEXT NOT NULL DEFAULT '[]'` | 商品名 JSON 字符串数组 |
+| `default_dose` | `REAL` | 默认剂量 |
+| `unit` | `TEXT NOT NULL` | 单位 |
+| `color` | `TEXT NOT NULL` | 展示色 |
+| `route` | `TEXT NOT NULL DEFAULT 'sc'` | `sc / iv / oral` |
+| `disease_ids` | `TEXT NOT NULL DEFAULT '[]'` | 适用病种 JSON 字符串数组 |
+| `catalog_key` | `TEXT` | 内置目录标识；部分唯一索引 |
+| `is_builtin` | `INTEGER NOT NULL DEFAULT 0` | 是否内置 |
+| `extra` | `TEXT NOT NULL DEFAULT '{}'` | 预留扩展字段 JSON 对象，导入/导出原样保留 |
+| `created_at` | `INTEGER NOT NULL` | UTC 毫秒 |
+
+索引：`idx_medication_catalog_key` 对非空 `catalog_key` 唯一。
+
+### `treatment`
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | `TEXT PK` | |
+| `name` | `TEXT NOT NULL` | 组合名称，例如「阿达木单抗 + 甲氨蝶呤」 |
+| `is_active` | `INTEGER NOT NULL DEFAULT 0` | 仓库层保证同一时间只有一个激活方案 |
+| `created_at` | `INTEGER NOT NULL` | |
+
+### `treatment_line`
+
+每种药一条。
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | `TEXT PK` | |
+| `treatment_id` | `TEXT NOT NULL` | → `treatment(id)`，`ON DELETE CASCADE` |
+| `medication_id` | `TEXT NOT NULL` | → `medication(id)`，`ON DELETE CASCADE` |
+| `kind` | `TEXT NOT NULL` | `injection` 或 `oral` |
+| `label` | `TEXT NOT NULL` | 用药线名称，用于导入消歧 |
+| `is_host` | `INTEGER NOT NULL DEFAULT 0` | 主药；排程锚点跟随它的实际注射时间 |
+| `sync_with_host` | `INTEGER NOT NULL DEFAULT 0` | 注射线是否跟随主药针日 |
+| `anchor` | `TEXT NOT NULL DEFAULT 'actual'` | `actual / planned` |
+| `window_days` | `INTEGER NOT NULL DEFAULT 2` | 按时窗口 |
+| `oral_start` | `INTEGER` | 口服：首次服药时间（UTC 毫秒） |
+| `oral_duration_days` | `INTEGER` | 口服：疗程天数；`NULL` 表示长期 |
+| `oral_frequency` | `TEXT` | 口服：`daily / weekly / custom` |
+| `oral_times_per_period` | `INTEGER` | 口服：每个周期次数 |
+| `oral_days_of_week` | `TEXT` | 口服：JSON 数组，`0 = 周日 … 6 = 周六` |
+| `oral_remind_time` | `TEXT` | 口服：提醒时间 `HH:mm` |
+
+约束：`kind IN ('injection', 'oral')`；`anchor IN ('actual', 'planned')`；
+`oral_frequency IS NULL OR oral_frequency IN ('daily', 'weekly', 'custom')`。
+索引：`idx_treatment_line_treatment (treatment_id)`。
+
+### `treatment_phase`
+
+仅注射线使用，按 `order_idx` 依次执行。
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | `TEXT PK` | |
+| `line_id` | `TEXT NOT NULL` | → `treatment_line(id)`，`ON DELETE CASCADE` |
+| `order_idx` | `INTEGER NOT NULL` | 阶段顺序，同线内唯一 |
+| `kind` | `TEXT NOT NULL` | `loading / maintenance` |
+| `interval_days` | `INTEGER NOT NULL` | 间隔天数 |
+| `repeat_count` | `INTEGER NOT NULL DEFAULT 0` | 重复次数；`0` 表示无限重复 |
+| `dose` | `REAL` | 阶段剂量 |
+| `unit` | `TEXT NOT NULL` | 单位 |
+
+索引：`idx_treatment_phase_order (line_id, order_idx)`。
+
+### `dose_log`
+
+注射与口服共用，一条计划或一次补录对应一条记录。
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | `TEXT PK` | |
+| `line_id` | `TEXT NOT NULL` | → `treatment_line(id)`，`ON DELETE CASCADE` |
+| `scheduled_at` | `INTEGER` | 计划时间；补录可为 `NULL` |
+| `taken_at` | `INTEGER` | 实际打卡时间；`status = 'done'` 时必填 |
+| `status` | `TEXT NOT NULL` | `done / skipped / missed` |
+| `dose` | `REAL` | 剂量 |
+| `unit` | `TEXT` | 单位 |
+| `site` | `TEXT` | 注射部位；口服为 `NULL` |
+| `lot_number` | `TEXT` | 批号 |
+| `note` | `TEXT` | 备注 |
+| `created_at` | `INTEGER NOT NULL` | |
+| `updated_at` | `INTEGER NOT NULL` | |
+
+约束：`status IN ('done', 'skipped', 'missed')`。
+索引：`idx_dose_log_line_time (line_id, scheduled_at)`。
+
+### `reminder_rule`
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | `TEXT PK` | |
+| `treatment_id` | `TEXT NOT NULL UNIQUE` | → `treatment(id)`，`ON DELETE CASCADE` |
+| `offsets` | `TEXT NOT NULL DEFAULT '[-2,-1,0]'` | 相对计划注射日提前的天数，JSON 数组 |
+| `time_of_day` | `TEXT NOT NULL DEFAULT '09:00'` | `HH:mm` |
+| `snooze_minutes` | `INTEGER NOT NULL DEFAULT 10` | |
+| `enabled` | `INTEGER NOT NULL DEFAULT 1` | |
+
+### `symptom_log` / `symptom_tag`
+
+结构与 v3 相同，仅把关联列从 `injection_id` 改为：
+
+```sql
+dose_log_id TEXT REFERENCES dose_log(id) ON DELETE SET NULL
+```
+
+`pain_score`、标签快照、`app_setting.symptom_tags_seeded` 的约定不变。
+
+## 类型（`src/types.ts`）
+
+```ts
+export type LineKind = 'injection' | 'oral'
+export type OralFrequency = 'daily' | 'weekly' | 'custom'
+export type DoseStatus = 'done' | 'skipped' | 'missed'
+
+export interface TreatmentPhase {
+  id: string; lineId: string; orderIdx: number
+  kind: PhaseKind; intervalDays: number; repeatCount: number
+  dose: number | null; unit: string
+}
+
+export interface OralPlan {
+  startDate: number
+  durationDays: number | null
+  frequency: OralFrequency
+  timesPerPeriod: number
+  daysOfWeek: number[]      // 0 = 周日 … 6 = 周六
+  remindTime: string        // 'HH:mm'
+}
+
+export interface TreatmentLine {
+  id: string; treatmentId: string; medicationId: string
+  kind: LineKind; label: string
+  isHost: boolean; syncWithHost: boolean
+  anchor: RegimenAnchor; windowDays: number
+  phases: TreatmentPhase[]  // 仅注射线
+  oral: OralPlan | null     // 仅口服线
+}
+
+export interface Treatment {
+  id: string; name: string; isActive: boolean
+  createdAt: number; lines: TreatmentLine[]
+}
+
+export interface DoseLog {
+  id: string; lineId: string
+  scheduledAt: number | null; takenAt: number | null
+  status: DoseStatus
+  dose: number | null; unit: string
+  site: InjectionSite | null; lotNumber: string | null
+  note: string | null; createdAt: number; updatedAt: number
+}
+
+export interface ReminderRuleV5 {
+  id: string; treatmentId: string
+  offsets: number[]; timeOfDay: string
+  snoozeMinutes: number; enabled: boolean
+}
+```
+
+## 仓库 API（`src/db/repo.ts`）
+
+旧的 `regimens`、`injections` 已删除；使用：
+
+```ts
+export const treatments: {
+  list(): Promise<Treatment[]>
+  getActive(): Promise<Treatment | null>
+  get(id: string): Promise<Treatment | null>
+  create(input: TreatmentInput): Promise<Treatment>
+  /** 给已有方案补一条用药线；不自己开事务，便于导入复用 */
+  addLine(treatmentId: string, input: TreatmentLineInput): Promise<TreatmentLine>
+  setActive(id: string, active: boolean): Promise<void>
+  update(id: string, patch: TreatmentPatch): Promise<Treatment>
+  remove(id: string): Promise<void>
+}
+
+export const doseLogs: {
+  list(lineId?: string): Promise<DoseLog[]>
+  listBetween(from: number, to: number): Promise<DoseLog[]>
+  create(input: DoseLogInput): Promise<DoseLog>
+  update(id: string, patch: Partial<Omit<DoseLog, 'id' | 'lineId' | 'createdAt'>>): Promise<DoseLog>
+  remove(id: string): Promise<void>
+}
+```
+
+输入类型：
+
+```ts
+export interface TreatmentLineInput {
+  medicationId: string
+  kind: 'injection' | 'oral'
+  label: string
+  isHost?: boolean          // 默认 false
+  syncWithHost?: boolean    // 默认 false
+  anchor?: 'actual' | 'planned'
+  windowDays?: number       // 默认 2
+  phases?: Array<Omit<TreatmentPhase, 'id' | 'lineId'>>  // 注射线必填且至少一个
+  oral?: OralPlan | null    // 口服线必填
+}
+
+export interface TreatmentInput {
+  name: string
+  lines: TreatmentLineInput[]
+}
+
+export interface DoseLogInput {
+  lineId: string
+  scheduledAt: number | null
+  takenAt: number | null
+  status: 'done' | 'skipped' | 'missed'
+  dose?: number | null
+  unit?: string | null
+  site?: InjectionSite | null
+  lotNumber?: string | null
+  note?: string | null
+}
+```
+
+约束：
+
+- 一个治疗方案只能有一个 `isHost: true` 的注射线；`addLine` 和 `update` 都会维护这个不变式。
+- `create` 和 `addLine` 会拒绝重复添加同一种药；`update` 修改 `medicationId` 时目前没有查重（已知缺口）。
+- 口服线不保存 `phases`（传入也会被忽略）；注射线至少要有一个 `phases`。
+- `doseLogs.create` 在 `status = 'done'` 时必须提供 `takenAt`。
+- `symptom_log.dose_log_id` 可以关联注射或口服打卡；`ON DELETE SET NULL`，删打卡不会连带删症状。
+
+`medications` 仍提供 `list / listForDisease / get / create / update / remove`；
+`create` 接收 `brandNames: string[]`、`extra: Record<string, unknown>`，内部转 JSON 文本。
+内置药物的名称、通用名、商品名、给药途径来自目录，`update` 只允许改默认剂量等用户字段。
+
+## 迁移：v5 直接重建
+
+- `user_version = 0`：只执行 `CREATE_TABLES_SQL`。
+- `user_version = 1–4`：`DROP_ALL_TABLES_SQL` → `CREATE_TABLES_SQL` → `PRAGMA user_version = 5`。
+- **旧表 `regimen / regimen_phase / injection` 已删除**，v1–v4 的旧数据不会迁移，用户已确认开发阶段无需保留。
+- 重建后 `seedBuiltinMedications` 与 `seedBuiltinSymptomTags` 会重新播种；症状标签仍靠 `symptom_tags_seeded` 防止重复播种。
+- `DELETE_ALL_BUSINESS_DATA_SQL` 只清 v5 业务表；`DROP_ALL_TABLES_SQL` 同时包含新旧表名，用于清库和 v5 重建。
+
+## 导入 v2
+
+- 顶层：`{ format: "bioclock-import", version: 2, medications, injections, oralLogs, symptoms }`；v1 仍接受。
+- 注射/口服记录按「`lineLabel` → `medication` → 主药/第一条线」解析用药线。
+- 药已存在但当前方案没有对应线时自动建线：注射线用该药导入记录的中位间隔（默认 28 天），
+  口服线默认每天一次、09:00、长期；首条注射线自动成为主药。
+- 药物按药名 / 通用名 / 商品名 / 内置目录名称互认；命中已有药只补空字段、合并商品名。
+- 去重：打卡按「`takenAt` + `lineId`」，症状按「`loggedAt` + `severity` + 排序后的标签」。
+- `previewImport` 返回 `injections / oralLogs / symptoms / skipped / skippedNoLine / tags / medicationsCreated / linesCreated`，
+  确认框据此提示将新建几条用药线。
+- 完整字段见 [`docs/import-format.md`](./import-format.md)。

@@ -22,7 +22,12 @@ import {
   drugsForDiseases,
   regimenForDiseases,
 } from '@/data/catalog'
-import { medications as medicationRepo, regimens as regimenRepo, reminderRules, settings as settingsRepo } from '@/db/repo'
+import {
+  medications as medicationRepo,
+  reminderRules,
+  settings as settingsRepo,
+  treatments as treatmentRepo,
+} from '@/db/repo'
 import { rescheduleAll, ensurePermissions } from '@/notify/scheduler'
 import { useAppStore, errorMessage } from '@/store/app'
 import type { Disease, MedicationRoute, PhaseKind, RegimenPhaseTemplate } from '@/types'
@@ -122,6 +127,12 @@ function phaseLabel(kind: PhaseKind): string {
   return kind === 'loading' ? zh.settings.phaseLoading : zh.settings.phaseMaintenance
 }
 
+function routeLabel(route: MedicationRoute): string {
+  if (route === 'iv') return '医院输注'
+  if (route === 'oral') return '口服'
+  return '皮下注射'
+}
+
 export default function OnboardingScreen() {
   const theme = useTheme()
   const router = useRouter()
@@ -140,7 +151,7 @@ export default function OnboardingScreen() {
   const [customUnit, setCustomUnit] = useState('mg')
   const [customError, setCustomError] = useState<string | null>(null)
 
-  const [regimenName, setRegimenName] = useState('')
+  const [treatmentName, setTreatmentName] = useState('')
   const [basePhases, setBasePhases] = useState<EditablePhase[]>([])
   const [phases, setPhases] = useState<EditablePhase[]>([])
   const [noLoading, setNoLoading] = useState(false)
@@ -276,7 +287,7 @@ export default function OnboardingScreen() {
         setBasePhases(toEditablePhases([], fallback))
         setPhases(toEditablePhases([], fallback))
         setNoLoading(false)
-        setRegimenName(`${customName.trim()} 方案`)
+        setTreatmentName(`${customName.trim()} 方案`)
         setStep(2)
         return
       }
@@ -285,13 +296,13 @@ export default function OnboardingScreen() {
       setBasePhases(editable)
       setPhases(editable)
       setNoLoading(false)
-      setRegimenName(selectedEntry?.regimen.name ?? '我的用药方案')
+      setTreatmentName(selectedEntry?.regimen.name ?? '我的用药方案')
       setStep(2)
       return
     }
 
     if (step === 2) {
-      if (regimenName.trim() === '') {
+      if (treatmentName.trim() === '') {
         toast('请给方案起个名字')
         return
       }
@@ -401,6 +412,7 @@ export default function OnboardingScreen() {
         const medication = await medicationRepo.create({
           name: customName.trim(),
           genericName: customGeneric.trim() === '' ? null : customGeneric.trim(),
+          brandNames: [],
           defaultDose: dose,
           unit: customUnit.trim(),
           color: theme.colors.primary,
@@ -408,6 +420,7 @@ export default function OnboardingScreen() {
           diseaseIds,
           catalogKey: null,
           isBuiltin: false,
+          extra: {},
         })
         medicationId = medication.id
       } else {
@@ -420,6 +433,7 @@ export default function OnboardingScreen() {
           const medication = await medicationRepo.create({
             name: drug.name,
             genericName: drug.genericName,
+            brandNames: drug.brandNames,
             defaultDose: drug.defaultDose,
             unit: drug.unit,
             color: drug.color,
@@ -427,28 +441,64 @@ export default function OnboardingScreen() {
             diseaseIds: diseaseIdsForDrug(drug.key),
             catalogKey: drug.key,
             isBuiltin: true,
+            extra: {},
           })
           medicationId = medication.id
         }
       }
 
-      const regimen = await regimenRepo.create({
-        medicationId,
-        name: regimenName.trim(),
-        anchor: 'actual',
-        windowDays: 2,
-        phases: phases.map((phase, index) => ({
-          orderIdx: index,
-          kind: phase.kind,
-          intervalDays: phase.intervalDays,
-          repeatCount: phase.repeatCount,
-          dose: phase.doseText.trim() === '' ? null : Number(phase.doseText.trim()),
-          unit: phase.unit.trim(),
-        })),
+      const oralRoute = selectedRoute === 'oral'
+      const startOfToday = (() => {
+        const date = new Date()
+        date.setHours(0, 0, 0, 0)
+        return date.getTime()
+      })()
+
+      const treatment = await treatmentRepo.create({
+        name: treatmentName.trim(),
+        lines: [
+          oralRoute
+            ? {
+                medicationId,
+                kind: 'oral',
+                label: selectedDrugName,
+                isHost: false,
+                syncWithHost: false,
+                anchor: 'actual',
+                windowDays: selectedEntry?.regimen.windowDays ?? 2,
+                phases: [],
+                oral: {
+                  startDate: startOfToday,
+                  durationDays: null,
+                  frequency: 'daily',
+                  timesPerPeriod: 1,
+                  daysOfWeek: [],
+                  remindTime: timeOfDay,
+                },
+              }
+            : {
+                medicationId,
+                kind: 'injection',
+                label: selectedDrugName,
+                isHost: true,
+                syncWithHost: false,
+                anchor: 'actual',
+                windowDays: selectedEntry?.regimen.windowDays ?? 2,
+                phases: phases.map((phase, index) => ({
+                  orderIdx: index,
+                  kind: phase.kind,
+                  intervalDays: phase.intervalDays,
+                  repeatCount: phase.repeatCount,
+                  dose: phase.doseText.trim() === '' ? null : Number(phase.doseText.trim()),
+                  unit: phase.unit.trim(),
+                })),
+                oral: null,
+              },
+        ],
       })
-      await regimenRepo.setActive(regimen.id, true)
+      await treatmentRepo.setActive(treatment.id, true)
       await reminderRules.upsert({
-        regimenId: regimen.id,
+        treatmentId: treatment.id,
         offsets,
         timeOfDay,
         snoozeMinutes: 10,
@@ -719,6 +769,7 @@ export default function OnboardingScreen() {
                     options={[
                       { value: 'sc', label: '皮下注射' },
                       { value: 'iv', label: '医院输注' },
+                      { value: 'oral', label: '口服' },
                     ]}
                     value={customRoute}
                     onChange={setCustomRoute}
@@ -901,14 +952,14 @@ export default function OnboardingScreen() {
           {selectedDrugName}
         </Text>
         <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.xs }}>
-          {selectedRoute === 'iv' ? '医院输注' : '皮下注射'}
+          {routeLabel(selectedRoute)}
         </Text>
       </View>
 
       <TextField
         label={zh.settings.regimenName}
-        value={regimenName}
-        onChangeText={setRegimenName}
+        value={treatmentName}
+        onChangeText={setTreatmentName}
         placeholder="例如：阿达木单抗 每 2 周"
         accessibilityLabel="用药方案名称"
       />

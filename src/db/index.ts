@@ -3,8 +3,7 @@ import {
   CREATE_TABLES_SQL,
   DATABASE_NAME,
   DELETE_ALL_BUSINESS_DATA_SQL,
-  MIGRATION_2_SQL,
-  MIGRATION_3_SQL,
+  DROP_ALL_TABLES_SQL,
   SCHEMA_VERSION,
 } from './schema'
 import { seedBuiltinMedications, seedBuiltinSymptomTags } from './seed'
@@ -50,30 +49,30 @@ async function readUserVersion(db: SQLite.SQLiteDatabase): Promise<number> {
   return row?.user_version ?? 0
 }
 
-async function migrate(db: SQLite.SQLiteDatabase, fromVersion: number): Promise<void> {
-  let version = fromVersion
+/**
+ * 建库 / 升级的纯 SQL 部分，抽成纯函数方便在 Node 里测试。
+ *
+ * - 全新库（user_version = 0）：只建表，不做任何删除。
+ * - v1–v4 老库：v5 换了整套方案模型（regimen → treatment），
+ *   用户已确认开发阶段老数据不必保留，所以直接 DROP 全部旧表后按 CREATE_TABLES_SQL 重建。
+ *   内置药与症状标签会在 openAndMigrate 里重新播种。
+ */
+export function buildMigrationSql(fromVersion: number): string {
+  if (fromVersion === 0) {
+    return `${CREATE_TABLES_SQL}\nPRAGMA user_version = ${SCHEMA_VERSION};`
+  }
+  return `${DROP_ALL_TABLES_SQL}\n${CREATE_TABLES_SQL}\nPRAGMA user_version = ${SCHEMA_VERSION};`
+}
 
-  // 全新建库：CREATE_TABLES_SQL 已包含所有最新列，
-  // 直接建表并标记为最新版本，不能进入增量迁移分支（否则会重复加列）。
-  if (version === 0) {
-    await db.execAsync(CREATE_TABLES_SQL)
-    await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`)
+async function migrate(db: SQLite.SQLiteDatabase, fromVersion: number): Promise<void> {
+  if (fromVersion === 0) {
+    await db.execAsync(buildMigrationSql(0))
     return
   }
 
-  // 旧库升级：v1 -> v2，药物表补 route / disease_ids / catalog_key。
-  if (version < 2) {
-    await db.execAsync(MIGRATION_2_SQL)
-    version = 2
-  }
-
-  // v2 -> v3：症状疼痛评分 + 可维护的症状标签表。
-  if (version < 3) {
-    await db.execAsync(MIGRATION_3_SQL)
-    version = 3
-  }
-
-  await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`)
+  await db.withTransactionAsync(async () => {
+    await db.execAsync(buildMigrationSql(fromVersion))
+  })
 }
 
 /**
@@ -84,7 +83,7 @@ export async function initDatabase(): Promise<void> {
 }
 
 /**
- * 清空全部业务数据，保留内置药（并确保 5 种内置药都存在）。
+ * 清空全部业务数据（治疗方案、打卡、症状、提醒、设置），保留内置药并重新播种症状标签。
  */
 export async function resetDatabase(): Promise<void> {
   const db = await getDatabase()

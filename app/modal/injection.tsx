@@ -14,8 +14,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useTheme } from '@/ui/theme'
 import { zh } from '@/i18n/zh'
 import { useAppStore, errorMessage } from '@/store/app'
-import type { InjectionSite } from '@/types'
+import { buildSchedule } from '@/domain/schedule'
 import { recommendSite } from '@/domain/rotation'
+import type { DoseLogInput } from '@/db/repo'
+import type { Injection, InjectionSite, Medication } from '@/types'
 import { TextField } from '@/ui/components/Field'
 import { DateTimeField } from '@/ui/components/TimeField'
 import { SitePicker } from '@/ui/components/SitePicker'
@@ -25,6 +27,11 @@ import { InlineError } from '@/ui/components/Layout'
 import { LoadingView } from '@/ui/components/StateView'
 import { toast, ToastHost } from '@/ui/components/Toast'
 import { useDismissOnRelock } from '@/ui/components/hooks'
+import { calendarDayDiff } from '@/ui/components/date'
+
+function firstParam(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value
+}
 
 function parseDose(text: string): { ok: true; value: number | null } | { ok: false } {
   const trimmed = text.trim()
@@ -38,23 +45,23 @@ export default function InjectionModal() {
   const theme = useTheme()
   const router = useRouter()
   const insets = useSafeAreaInsets()
-  const params = useLocalSearchParams<{ id?: string | string[] }>()
-  const editingId = Array.isArray(params.id) ? params.id[0] : params.id
+  const params = useLocalSearchParams<{ id?: string | string[]; lineId?: string | string[] }>()
+  const editingId = firstParam(params.id)
+  const paramLineId = firstParam(params.lineId)
 
   const ready = useAppStore((state) => state.ready)
-  const regimen = useAppStore((state) => state.regimen)
-  const medication = useAppStore((state) => state.medication)
+  const treatment = useAppStore((state) => state.treatment)
   const medications = useAppStore((state) => state.medications)
-  const injections = useAppStore((state) => state.injections)
+  const doseLogs = useAppStore((state) => state.doseLogs)
   const appLockEnabled = useAppStore((state) => state.settings.app_lock === '1')
   const reload = useAppStore((state) => state.reload)
-  const addInjection = useAppStore((state) => state.addInjection)
-  const updateInjection = useAppStore((state) => state.updateInjection)
+  const addDoseLog = useAppStore((state) => state.addDoseLog)
+  const updateDoseLog = useAppStore((state) => state.updateDoseLog)
 
-  const editing = editingId ? injections.find((item) => item.id === editingId) : undefined
+  const editing = editingId ? doseLogs.find((item) => item.id === editingId) : undefined
 
-  const [injectedAt, setInjectedAt] = useState<number>(() => Date.now())
-  const [medicationId, setMedicationId] = useState<string>('')
+  const [lineId, setLineId] = useState<string>('')
+  const [takenAt, setTakenAt] = useState<number>(() => Date.now())
   const [doseText, setDoseText] = useState<string>('')
   const [unit, setUnit] = useState<string>('mg')
   const [site, setSite] = useState<InjectionSite>('abdomen_ul')
@@ -63,6 +70,60 @@ export default function InjectionModal() {
   const [initialized, setInitialized] = useState(false)
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
+
+  const injectionLines = useMemo(
+    () => treatment?.lines.filter((line) => line.kind === 'injection') ?? [],
+    [treatment],
+  )
+
+  // 可切换的药：本治疗组合里的注射线；编辑记录时锁定原用药线，避免历史记录被改标到另一种药。
+  const selectableLines = useMemo(() => {
+    if (!treatment) return []
+    if (editing) {
+      const current = treatment.lines.find((line) => line.id === editing.lineId)
+      return current ? [current] : []
+    }
+    return treatment.lines.filter((line) => line.kind === 'injection')
+  }, [treatment, editing])
+
+  const medicationById = useMemo(() => {
+    const map = new Map<string, Medication>()
+    for (const med of medications) map.set(med.id, med)
+    return map
+  }, [medications])
+
+  const selectedLine = treatment?.lines.find((line) => line.id === lineId) ?? null
+  const selectedMedication = selectedLine
+    ? medicationById.get(selectedLine.medicationId) ?? null
+    : null
+  const route = selectedMedication?.route ?? 'sc'
+
+  const siteHistory = useMemo(
+    () =>
+      doseLogs
+        .filter((log) => log.site !== null)
+        .map((log) => ({
+          site: log.site as InjectionSite,
+          injectedAt: log.takenAt ?? log.scheduledAt ?? log.createdAt,
+        })),
+    [doseLogs],
+  )
+  const recommended = useMemo(() => recommendSite(siteHistory as Injection[]), [siteHistory])
+
+  const nextPlanFor = (targetLineId: string) => {
+    if (!treatment) return null
+    try {
+      const plans = buildSchedule({ lines: treatment.lines, logs: doseLogs, now: Date.now() })
+      return (
+        plans.find(
+          (plan) =>
+            plan.lineId === targetLineId && plan.status !== 'done' && plan.status !== 'missed',
+        ) ?? null
+      )
+    } catch {
+      return null
+    }
+  }
 
   useEffect(() => {
     if (!ready) {
@@ -73,33 +134,39 @@ export default function InjectionModal() {
   }, [ready, reload])
 
   useEffect(() => {
-    if (!ready || initialized) return
+    if (!ready || initialized || !treatment) return
     if (editing) {
-      setInjectedAt(editing.injectedAt)
-      setMedicationId(editing.medicationId)
+      const line = treatment.lines.find((item) => item.id === editing.lineId)
+      const medication = line ? medicationById.get(line.medicationId) : undefined
+      setLineId(editing.lineId)
+      setTakenAt(editing.takenAt ?? Date.now())
       setDoseText(editing.dose !== null ? String(editing.dose) : '')
-      setUnit(editing.unit)
-      setSite(editing.site)
+      setUnit(editing.unit || medication?.unit || 'mg')
+      setSite(editing.site ?? recommended)
       setLotNumber(editing.lotNumber ?? '')
       setNote(editing.note ?? '')
       setInitialized(true)
       return
     }
-    if (medication) {
-      setMedicationId(medication.id)
-      setDoseText(medication.defaultDose !== null ? String(medication.defaultDose) : '')
-      setUnit(medication.unit)
+
+    const preferred =
+      (paramLineId ? injectionLines.find((line) => line.id === paramLineId) : undefined) ??
+      injectionLines.find((line) => line.isHost) ??
+      injectionLines[0] ??
+      null
+    if (preferred) {
+      const medication = medicationById.get(preferred.medicationId)
+      const plan = nextPlanFor(preferred.id)
+      const dose = plan?.dose ?? medication?.defaultDose ?? null
+      setLineId(preferred.id)
+      setDoseText(dose !== null ? String(dose) : '')
+      setUnit(plan?.unit || medication?.unit || 'mg')
     }
-    setSite(recommendSite(injections))
+    setSite(recommended)
     setInitialized(true)
-  }, [ready, initialized, editing, medication, injections])
-
-  const selectedMedication = useMemo(() => {
-    return medications.find((item) => item.id === medicationId) ?? null
-  }, [medications, medicationId])
-
-  const route = selectedMedication?.route ?? medication?.route ?? 'sc'
-  const recommended = useMemo(() => recommendSite(injections), [injections])
+    // 只在首次拿到数据时回填；后续切换用药由 selectLine 处理。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, initialized, editing, treatment, injectionLines, paramLineId, medicationById, recommended])
 
   const close = () => {
     if (router.canGoBack()) {
@@ -111,24 +178,40 @@ export default function InjectionModal() {
 
   useDismissOnRelock(close, appLockEnabled)
 
-  const selectMedication = (id: string) => {
-    const next = medications.find((item) => item.id === id)
-    if (!next) return
-    setMedicationId(id)
-    setUnit(next.unit)
-    setDoseText(next.defaultDose !== null ? String(next.defaultDose) : '')
-    if (next.route === 'iv') setSite('abdomen_ul')
+  const selectLine = (id: string) => {
+    const line = treatment?.lines.find((item) => item.id === id)
+    if (!line) return
+    const medication = medicationById.get(line.medicationId)
+    const plan = nextPlanFor(line.id)
+    const dose = plan?.dose ?? medication?.defaultDose ?? null
+    setLineId(id)
+    setDoseText(dose !== null ? String(dose) : '')
+    setUnit(plan?.unit || medication?.unit || 'mg')
+    if (medication?.route === 'iv' || medication?.route === 'oral') setSite('abdomen_ul')
+  }
+
+  const matchScheduledAt = (targetLineId: string, at: number): number | null => {
+    if (!treatment) return null
+    try {
+      const logs = editing ? doseLogs.filter((log) => log.id !== editing.id) : doseLogs
+      const plans = buildSchedule({ lines: treatment.lines, logs, now: at })
+      const match = plans.find(
+        (plan) => plan.lineId === targetLineId && calendarDayDiff(plan.plannedAt, at) === 0,
+      )
+      return match ? match.plannedAt : null
+    } catch {
+      return null
+    }
   }
 
   const save = async () => {
     setFormError(null)
-    const targetRegimenId = editing?.regimenId ?? regimen?.id
-    if (!targetRegimenId) {
-      setFormError('还没有用药方案，请先在设置中完成配置。')
+    if (!treatment) {
+      setFormError('还没有治疗方案，请先在设置中完成配置。')
       return
     }
-    if (!medicationId) {
-      setFormError('请选择药物。')
+    if (!selectedLine) {
+      setFormError('请选择要登记的用药。')
       return
     }
     if (unit.trim() === '') {
@@ -140,18 +223,20 @@ export default function InjectionModal() {
       setFormError('剂量必须是大于或等于 0 的数字。')
       return
     }
-    if (!Number.isFinite(injectedAt) || injectedAt <= 0) {
+    if (!Number.isFinite(takenAt) || takenAt <= 0) {
       setFormError('注射时间不合法。')
       return
     }
 
-    const payload = {
-      regimenId: targetRegimenId,
-      medicationId,
-      injectedAt,
+    const isSc = selectedMedication?.route === 'sc'
+    const payload: DoseLogInput = {
+      lineId: selectedLine.id,
+      scheduledAt: matchScheduledAt(selectedLine.id, takenAt),
+      takenAt,
+      status: 'done',
       dose: dose.value,
       unit: unit.trim(),
-      site: route === 'iv' ? ('abdomen_ul' as InjectionSite) : site,
+      site: isSc ? site : null,
       lotNumber: lotNumber.trim() === '' ? null : lotNumber.trim(),
       note: note.trim() === '' ? null : note.trim(),
     }
@@ -159,8 +244,17 @@ export default function InjectionModal() {
     setSaving(true)
     try {
       const result = editing
-        ? await updateInjection(editing.id, payload)
-        : await addInjection(payload)
+        ? await updateDoseLog(editing.id, {
+            scheduledAt: payload.scheduledAt,
+            takenAt: payload.takenAt,
+            status: payload.status,
+            dose: payload.dose,
+            unit: payload.unit,
+            site: payload.site,
+            lotNumber: payload.lotNumber,
+            note: payload.note,
+          })
+        : await addDoseLog(payload)
       close()
       toast(editing ? '注射记录已更新' : '已记录，下次提醒已更新', 'success')
       if (result.notifyWarning) toast(result.notifyWarning, 'error')
@@ -237,13 +331,14 @@ export default function InjectionModal() {
                   gap: theme.spacing.lg,
                 }}
               >
-                {!regimen && !editing ? (
-                  <InlineError message="还没有用药方案，请先在设置里完成配置后再登记注射。" />
+                {!treatment && !editing ? (
+                  <InlineError message="还没有治疗方案，请先在设置里完成配置后再登记注射。" />
                 ) : null}
+
                 <DateTimeField
                   label={zh.form.injectedAt}
-                  value={injectedAt}
-                  onChange={setInjectedAt}
+                  value={takenAt}
+                  onChange={setTakenAt}
                 />
 
                 <View style={{ gap: 8 }}>
@@ -258,15 +353,16 @@ export default function InjectionModal() {
                   </Text>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                     <View style={{ flexDirection: 'row', gap: 8, paddingRight: 8 }}>
-                      {medications.map((item) => {
-                        const selected = item.id === medicationId
+                      {selectableLines.map((line) => {
+                        const medication = medicationById.get(line.medicationId)
+                        const selected = line.id === lineId
                         return (
                           <Pressable
-                            key={item.id}
+                            key={line.id}
                             accessibilityRole="button"
-                            accessibilityLabel={item.name}
+                            accessibilityLabel={medication?.name ?? line.label}
                             accessibilityState={{ selected }}
-                            onPress={() => selectMedication(item.id)}
+                            onPress={() => selectLine(line.id)}
                             style={({ pressed }) => [
                               styles.medChip,
                               {
@@ -286,7 +382,7 @@ export default function InjectionModal() {
                                 fontWeight: selected ? '600' : '400',
                               }}
                             >
-                              {item.name}
+                              {medication?.name ?? line.label}
                             </Text>
                           </Pressable>
                         )
@@ -350,7 +446,9 @@ export default function InjectionModal() {
                         lineHeight: theme.lineHeight.md,
                       }}
                     >
-                      这是静脉输注药物，通常在医院完成，不需要记录注射部位。
+                      {route === 'oral'
+                        ? '这是口服用药，不需要记录注射部位。'
+                        : '这是静脉输注药物，通常在医院完成，不需要记录注射部位。'}
                     </Text>
                   </View>
                 )}
@@ -391,7 +489,7 @@ export default function InjectionModal() {
                   void save()
                 }}
                 loading={saving}
-                disabled={!ready || (!regimen && !editing)}
+                disabled={!ready || (!treatment && !editing)}
                 style={{ flex: 2 }}
               />
             </View>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
+  Alert,
   FlatList,
   KeyboardAvoidingView,
   Modal,
@@ -21,31 +22,53 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useTheme } from '@/ui/theme'
 import type { ThemeMode } from '@/ui/theme'
 import { zh } from '@/i18n/zh'
-import { useAppStore, errorMessage } from '@/store/app'
+import {
+  useAppStore,
+  errorMessage,
+  type SaveTreatmentInput,
+  type TreatmentLineDraft,
+} from '@/store/app'
 import { resetDatabase } from '@/db'
-import { regimens as regimenRepo } from '@/db/repo'
-import { cancelAll, rescheduleAll } from '@/notify/scheduler'
-import { exportCsv, exportPdf, shareFile } from '@/export'
+import { cancelAll } from '@/notify/scheduler'
+import { exportCsv, exportExcel, exportJson, exportPdf, shareFile } from '@/export'
+import { previewImport, type ImportResult } from '@/import'
 import { parseImportJson, type ImportPayload } from '@/import/schema'
 import { parseSpreadsheet } from '@/import/spreadsheet'
-import { DISEASE_GROUPS, diseasesByGroup, diseasesLabel, resolveDiseaseIds } from '@/data/diseases'
-import type { Disease, Regimen } from '@/types'
+import { DISEASE_GROUPS, diseasesByGroup, resolveDiseaseIds } from '@/data/diseases'
+import type {
+  Disease,
+  LineKind,
+  Medication,
+  OralFrequency,
+  PhaseKind,
+  RegimenAnchor,
+  Treatment,
+  TreatmentLine,
+} from '@/types'
 import { Button } from '@/ui/components/Button'
 import { Card } from '@/ui/components/Card'
 import { Chip } from '@/ui/components/Chip'
 import { ConfirmDialog } from '@/ui/components/ConfirmDialog'
 import { TextField } from '@/ui/components/Field'
 import { Icon } from '@/ui/components/Icon'
-import { Screen, ScreenHeader, ScrollArea, SectionTitle } from '@/ui/components/Layout'
+import { Screen, ScreenHeader, ScrollArea, SectionTitle, InlineError } from '@/ui/components/Layout'
 import { StateView } from '@/ui/components/StateView'
 import { SymptomTagManager } from '@/ui/components/SymptomFields'
+import { MedicationManager } from '@/ui/components/MedicationManager'
 import { SegmentedControl } from '@/ui/components/SegmentedControl'
-import { TimeOfDayField } from '@/ui/components/TimeField'
+import { Stepper } from '@/ui/components/Stepper'
+import { DateTimeField, TimeOfDayField } from '@/ui/components/TimeField'
 import { toast, ToastHost } from '@/ui/components/Toast'
-import { formatDate } from '@/ui/components/date'
-
 
 const PDF_RANGES = [90, 180, 365]
+
+const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'] as const
+
+const ORAL_FREQUENCY_LABELS: Record<OralFrequency, string> = {
+  daily: '每天',
+  weekly: '每周',
+  custom: '自定义',
+}
 
 /**
  * 读取 DocumentPicker 选中的文件。
@@ -145,7 +168,10 @@ function SettingRow({
       accessibilityRole="button"
       accessibilityLabel={label}
       onPress={onPress}
-      style={({ pressed }) => [rowStyle, { backgroundColor: pressed ? theme.colors.surfaceMuted : 'transparent' }]}
+      style={({ pressed }) => [
+        rowStyle,
+        { backgroundColor: pressed ? theme.colors.surfaceMuted : 'transparent' },
+      ]}
     >
       {content}
     </Pressable>
@@ -220,7 +246,13 @@ function BottomSheet({
   const theme = useTheme()
   const insets = useSafeAreaInsets()
   return (
-    <Modal visible={visible} transparent animationType="slide" statusBarTranslucent onRequestClose={onClose}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="slide"
+      statusBarTranslucent
+      onRequestClose={onClose}
+    >
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={[styles.sheetOverlay, { backgroundColor: theme.colors.overlay }]}
@@ -273,6 +305,929 @@ function BottomSheet({
   )
 }
 
+// ---------------------------------------------------------------------------
+// 治疗方案编辑器草稿
+// ---------------------------------------------------------------------------
+
+interface PhaseDraft {
+  kind: PhaseKind
+  intervalDays: number
+  repeatCount: number
+  doseText: string
+  unit: string
+}
+
+interface OralDraft {
+  startDate: number
+  durationText: string
+  frequency: OralFrequency
+  timesPerPeriod: number
+  daysOfWeek: number[]
+  remindTime: string
+}
+
+interface LineDraft {
+  key: string
+  id: string | null
+  kind: LineKind
+  medicationId: string
+  label: string
+  isHost: boolean
+  syncWithHost: boolean
+  anchor: RegimenAnchor
+  windowDays: number
+  phases: PhaseDraft[]
+  oral: OralDraft
+}
+
+let draftSeq = 0
+function nextKey(prefix: string): string {
+  draftSeq += 1
+  return `${prefix}-${Date.now()}-${draftSeq}`
+}
+
+function defaultPhase(): PhaseDraft {
+  return { kind: 'maintenance', intervalDays: 28, repeatCount: 0, doseText: '', unit: 'mg' }
+}
+
+function defaultOral(): OralDraft {
+  return {
+    startDate: Date.now(),
+    durationText: '',
+    frequency: 'daily',
+    timesPerPeriod: 1,
+    daysOfWeek: [],
+    remindTime: '09:00',
+  }
+}
+
+function newLineDraft(kind: LineKind, medications: Medication[]): LineDraft {
+  const eligible =
+    kind === 'injection' ? medications.filter((medication) => medication.route !== 'oral') : medications
+  const medication = eligible[0] ?? null
+  return {
+    key: nextKey('line'),
+    id: null,
+    kind,
+    medicationId: medication?.id ?? '',
+    label: medication?.name ?? '',
+    isHost: false,
+    syncWithHost: kind === 'injection',
+    anchor: 'actual',
+    windowDays: 2,
+    phases: [defaultPhase()],
+    oral: defaultOral(),
+  }
+}
+
+function lineToDraft(line: TreatmentLine): LineDraft {
+  return {
+    key: line.id,
+    id: line.id,
+    kind: line.kind,
+    medicationId: line.medicationId,
+    label: line.label,
+    isHost: line.isHost,
+    syncWithHost: line.syncWithHost,
+    anchor: line.anchor,
+    windowDays: line.windowDays,
+    phases: line.phases.map((phase) => ({
+      kind: phase.kind,
+      intervalDays: phase.intervalDays,
+      repeatCount: phase.repeatCount,
+      doseText: phase.dose === null ? '' : String(phase.dose),
+      unit: phase.unit,
+    })),
+    oral: line.oral
+      ? {
+          startDate: line.oral.startDate,
+          durationText: line.oral.durationDays === null ? '' : String(line.oral.durationDays),
+          frequency: line.oral.frequency,
+          timesPerPeriod: line.oral.timesPerPeriod,
+          daysOfWeek: line.oral.daysOfWeek,
+          remindTime: line.oral.remindTime,
+        }
+      : defaultOral(),
+  }
+}
+
+function draftSummary(line: LineDraft, medications: Medication[]): string {
+  const medication = medications.find((item) => item.id === line.medicationId)
+  const name = medication?.name ?? (line.label.trim() === '' ? '未选择药物' : line.label)
+  if (line.kind === 'oral') {
+    const frequency = ORAL_FREQUENCY_LABELS[line.oral.frequency]
+    const times = line.oral.frequency === 'daily' ? '' : ` ${line.oral.timesPerPeriod} 次`
+    const duration =
+      line.oral.durationText.trim() === '' ? '长期' : `${line.oral.durationText.trim()} 天`
+    return `${name} · 口服 · ${frequency}${times} · ${duration}`
+  }
+  const last = line.phases[line.phases.length - 1]
+  const interval = last ? `每 ${last.intervalDays} 天` : '未设间隔'
+  const dose = last && last.doseText.trim() !== '' ? ` · ${last.doseText.trim()} ${last.unit}` : ''
+  const phases = line.phases.length > 1 ? ` · ${line.phases.length} 个阶段` : ''
+  const host = line.isHost ? ' · 主药' : ''
+  return `${name} · 注射 · ${interval}${dose}${phases}${host}`
+}
+
+/** 治疗方案卡片里对单条线的摘要（用已入库的 TreatmentLine）。 */
+function describeLine(line: TreatmentLine, medications: Medication[]): string {
+  const medication = medications.find((item) => item.id === line.medicationId)
+  const name = medication?.name ?? line.label
+  if (line.kind === 'oral') {
+    const oral = line.oral
+    if (!oral) return `${name} · 口服`
+    const frequency = ORAL_FREQUENCY_LABELS[oral.frequency]
+    const times = oral.frequency === 'daily' ? '' : ` ${oral.timesPerPeriod} 次`
+    const duration = oral.durationDays === null ? '长期' : `${oral.durationDays} 天`
+    return `${name} · 口服 · ${frequency}${times} · ${duration}`
+  }
+  const last = line.phases[line.phases.length - 1]
+  const interval = last ? `每 ${last.intervalDays} 天` : '未设间隔'
+  const dose = last && last.dose !== null ? ` · ${last.dose} ${last.unit}` : ''
+  const host = line.isHost ? ' · 主药' : ''
+  return `${name} · 注射 · ${interval}${dose}${host}`
+}
+
+function validateLine(line: LineDraft): string | null {
+  if (line.medicationId === '') return '请选择药物'
+  if (line.label.trim() === '') return '请填写用药线名称'
+  if (line.kind === 'injection') {
+    if (line.phases.length === 0) return '注射线至少需要一个阶段'
+    for (const phase of line.phases) {
+      if (!Number.isFinite(phase.intervalDays) || phase.intervalDays < 1) return '间隔天数至少为 1'
+      if (phase.unit.trim() === '') return '阶段单位不能为空'
+      if (phase.doseText.trim() !== '') {
+        const dose = Number(phase.doseText.trim())
+        if (!Number.isFinite(dose) || dose < 0) return '剂量必须是大于或等于 0 的数字'
+      }
+    }
+    return null
+  }
+  if (line.oral.durationText.trim() !== '') {
+    const days = Number(line.oral.durationText.trim())
+    if (!Number.isInteger(days) || days < 1) return '疗程天数必须是大于 0 的整数'
+  }
+  if (line.oral.frequency !== 'daily') {
+    if (line.oral.timesPerPeriod < 1) return '每周或自定义服药需要至少 1 次'
+    if (line.oral.daysOfWeek.length === 0) return '请至少选择一天服药'
+  }
+  return null
+}
+
+function buildLineInput(line: LineDraft): TreatmentLineDraft {
+  const base = {
+    medicationId: line.medicationId,
+    kind: line.kind,
+    label: line.label.trim() === '' ? '用药' : line.label.trim(),
+    isHost: line.isHost,
+    syncWithHost: line.kind === 'injection' && !line.isHost ? line.syncWithHost : false,
+    anchor: line.anchor,
+    windowDays: line.windowDays,
+    ...(line.id !== null ? { id: line.id } : {}),
+  }
+  if (line.kind === 'oral') {
+    return {
+      ...base,
+      oral: {
+        startDate: line.oral.startDate,
+        durationDays:
+          line.oral.durationText.trim() === '' ? null : Number(line.oral.durationText.trim()),
+        frequency: line.oral.frequency,
+        timesPerPeriod: line.oral.frequency === 'daily' ? 0 : line.oral.timesPerPeriod,
+        daysOfWeek: line.oral.frequency === 'daily' ? [] : line.oral.daysOfWeek,
+        remindTime: line.oral.remindTime,
+      },
+    }
+  }
+  return {
+    ...base,
+    phases: line.phases.map((phase, index) => ({
+      orderIdx: index,
+      kind: phase.kind,
+      intervalDays: phase.intervalDays,
+      repeatCount: phase.repeatCount,
+      dose: phase.doseText.trim() === '' ? null : Number(phase.doseText.trim()),
+      unit: phase.unit.trim(),
+    })),
+  }
+}
+
+function MedicationChips({
+  medications,
+  value,
+  onSelect,
+}: {
+  medications: Medication[]
+  value: string
+  onSelect: (medication: Medication) => void
+}) {
+  const theme = useTheme()
+  if (medications.length === 0) {
+    return (
+      <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.xs }}>
+        还没有可选的药物，请先在「我的药物」里添加。
+      </Text>
+    )
+  }
+  return (
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+      {medications.map((medication) => {
+        const selected = medication.id === value
+        return (
+          <Pressable
+            key={medication.id}
+            accessibilityRole="button"
+            accessibilityLabel={medication.name}
+            accessibilityState={{ selected }}
+            onPress={() => onSelect(medication)}
+            style={({ pressed }) => [
+              styles.medChip,
+              {
+                borderColor: selected ? theme.colors.primary : theme.colors.border,
+                backgroundColor: selected ? theme.colors.primaryMuted : theme.colors.surface,
+                borderRadius: theme.radius.pill,
+                opacity: pressed ? 0.75 : 1,
+              },
+            ]}
+          >
+            <Text
+              style={{
+                color: selected ? theme.colors.primary : theme.colors.text,
+                fontSize: theme.fontSize.sm,
+                fontWeight: selected ? '600' : '400',
+              }}
+            >
+              {medication.name}
+            </Text>
+          </Pressable>
+        )
+      })}
+    </View>
+  )
+}
+
+function TreatmentEditor({
+  visible,
+  treatment,
+  medications,
+  onSaved,
+}: {
+  visible: boolean
+  treatment: Treatment | null
+  medications: Medication[]
+  onSaved: () => void
+}) {
+  const theme = useTheme()
+  const saveTreatment = useAppStore((state) => state.saveTreatment)
+  const setActiveTreatment = useAppStore((state) => state.setActiveTreatment)
+
+  const [view, setView] = useState<'list' | 'line'>('list')
+  const [name, setName] = useState('')
+  const [lines, setLines] = useState<LineDraft[]>([])
+  const [lineDraft, setLineDraft] = useState<LineDraft | null>(null)
+  const [editingKey, setEditingKey] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // 打开时把已有方案灌进草稿。只在可见性变化时重置，避免编辑途中被无关刷新覆盖。
+  useEffect(() => {
+    if (!visible) return
+    setName(treatment?.name ?? '')
+    setLines(treatment ? treatment.lines.map(lineToDraft) : [])
+    setView('list')
+    setLineDraft(null)
+    setEditingKey(null)
+    setError(null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible])
+
+  const openNewLine = (kind: LineKind) => {
+    setLineDraft(newLineDraft(kind, medications))
+    setEditingKey(null)
+    setError(null)
+    setView('line')
+  }
+
+  const openEditLine = (key: string) => {
+    const found = lines.find((line) => line.key === key)
+    if (!found) return
+    setLineDraft({ ...found, phases: found.phases.map((phase) => ({ ...phase })), oral: { ...found.oral } })
+    setEditingKey(key)
+    setError(null)
+    setView('line')
+  }
+
+  const closeLine = () => {
+    setView('list')
+    setLineDraft(null)
+    setEditingKey(null)
+    setError(null)
+  }
+
+  const commitLine = () => {
+    if (!lineDraft) return
+    const problem = validateLine(lineDraft)
+    if (problem) {
+      setError(problem)
+      return
+    }
+    const draft = lineDraft
+    setLines((current) => {
+      const next = editingKey
+        ? current.map((line) => (line.key === editingKey ? draft : line))
+        : [...current, draft]
+      // 方案内只能有一条主药：设为主药时取消其它线的主药标记。
+      return draft.isHost ? next.map((line) => (line.key === draft.key ? line : { ...line, isHost: false })) : next
+    })
+    closeLine()
+  }
+
+  const removeLine = (key: string) => {
+    const target = lines.find((line) => line.key === key)
+    if (target?.id) {
+      Alert.alert(
+        '删除这条用药线？',
+        '这条线的历史打卡记录会一起删除，且无法恢复。只是暂时不打这种药的话，可以停用整个治疗方案。',
+        [
+          { text: zh.common.cancel, style: 'cancel' },
+          {
+            text: zh.common.delete,
+            style: 'destructive',
+            onPress: () => setLines((current) => current.filter((line) => line.key !== key)),
+          },
+        ],
+      )
+      return
+    }
+    setLines((current) => current.filter((line) => line.key !== key))
+  }
+
+  const saveEditor = async () => {
+    setError(null)
+    const trimmedName = name.trim()
+    if (trimmedName === '') {
+      setError('请填写方案名称')
+      return
+    }
+    if (lines.length === 0) {
+      setError('至少需要一条用药线')
+      return
+    }
+    if (lines.filter((line) => line.isHost).length > 1) {
+      setError('方案内只能有一条主药')
+      return
+    }
+    for (const line of lines) {
+      const problem = validateLine(line)
+      if (problem) {
+        setError(problem)
+        return
+      }
+    }
+
+    const beforeIds = new Set(useAppStore.getState().treatments.map((item) => item.id))
+
+    setSaving(true)
+    try {
+      const input: SaveTreatmentInput = {
+        ...(treatment !== null ? { id: treatment.id } : {}),
+        name: trimmedName,
+        lines: lines.map(buildLineInput),
+      }
+      const result = await saveTreatment(input)
+
+      // 新建方案时自动激活（store 里 create 默认 is_active = 0）。
+      if (treatment === null) {
+        const created = useAppStore
+          .getState()
+          .treatments.find((item) => !beforeIds.has(item.id))
+        if (created) {
+          const activate = await setActiveTreatment(created.id, true)
+          if (activate.notifyWarning) toast(activate.notifyWarning, 'error')
+        }
+      }
+
+      onSaved()
+      toast(treatment !== null ? '治疗方案已更新' : '治疗方案已创建', 'success')
+      if (result.notifyWarning) toast(result.notifyWarning, 'error')
+    } catch (err) {
+      setError(errorMessage(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const renderList = () => (
+    <ScrollView
+      keyboardShouldPersistTaps="handled"
+      style={{ flex: 1 }}
+      contentContainerStyle={{
+        paddingHorizontal: theme.spacing.lg,
+        paddingBottom: theme.spacing.xl,
+        gap: theme.spacing.md,
+      }}
+    >
+      <TextField
+        label={zh.settings.regimenName}
+        value={name}
+        onChangeText={setName}
+        placeholder="例如：阿达木单抗 + 甲氨蝶呤"
+        accessibilityLabel="治疗方案名称"
+      />
+
+      <View style={{ gap: theme.spacing.sm }}>
+        <Text style={{ color: theme.colors.text, fontSize: theme.fontSize.md, fontWeight: '600' }}>
+          用药线
+        </Text>
+        <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.xs }}>
+          一个方案里可以有多种药；注射线只能有一条「主药」，排程以它的实际注射时间为锚点。
+        </Text>
+        {lines.length === 0 ? (
+          <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.xs }}>
+            还没有用药线，先添加一条注射线或口服线。
+          </Text>
+        ) : (
+          lines.map((line) => (
+            <View
+              key={line.key}
+              style={{
+                borderWidth: StyleSheet.hairlineWidth,
+                borderColor: theme.colors.border,
+                borderRadius: theme.radius.md,
+                padding: theme.spacing.md,
+                gap: theme.spacing.sm,
+                backgroundColor: theme.colors.surface,
+              }}
+            >
+              <Text style={{ color: theme.colors.text, fontSize: theme.fontSize.sm, fontWeight: '600' }}>
+                {draftSummary(line, medications)}
+              </Text>
+              <View style={{ flexDirection: 'row', gap: theme.spacing.sm }}>
+                <Button
+                  label={zh.common.edit}
+                  variant="secondary"
+                  onPress={() => openEditLine(line.key)}
+                  style={{ flex: 1 }}
+                />
+                <Button
+                  label={zh.common.delete}
+                  variant="danger"
+                  onPress={() => removeLine(line.key)}
+                  style={{ flex: 1 }}
+                />
+              </View>
+            </View>
+          ))
+        )}
+      </View>
+
+      <View style={{ flexDirection: 'row', gap: theme.spacing.md }}>
+        <Button
+          label="添加注射线"
+          variant="secondary"
+          icon="plus"
+          onPress={() => openNewLine('injection')}
+          style={{ flex: 1 }}
+        />
+        <Button
+          label="添加口服线"
+          variant="secondary"
+          icon="plus"
+          onPress={() => openNewLine('oral')}
+          style={{ flex: 1 }}
+        />
+      </View>
+
+      {error ? <InlineError message={error} /> : null}
+
+      <Button
+        label="保存治疗方案"
+        onPress={() => {
+          void saveEditor()
+        }}
+        loading={saving}
+        size="lg"
+      />
+    </ScrollView>
+  )
+
+  const renderInjectionFields = (draft: LineDraft) => {
+    const eligible = medications.filter((medication) => medication.route !== 'oral')
+    const hostExists = lines.some((line) => line.isHost && line.key !== editingKey)
+    const canSync = !draft.isHost && hostExists
+    return (
+      <>
+        <View style={{ gap: 8 }}>
+          <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
+            {zh.form.medicationName}
+          </Text>
+          {draft.id ? (
+            <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
+              {medications.find((medication) => medication.id === draft.medicationId)?.name ??
+                '已选药物'}
+              （换药请新建一条用药线，历史记录会按原药保留）
+            </Text>
+          ) : (
+            <MedicationChips
+              medications={eligible}
+              value={draft.medicationId}
+              onSelect={(medication) =>
+                setLineDraft((current) =>
+                  current
+                    ? {
+                        ...current,
+                        medicationId: medication.id,
+                        label: current.label.trim() === '' ? medication.name : current.label,
+                      }
+                    : current,
+                )
+              }
+            />
+          )}
+        </View>
+
+        <TextField
+          label="用药线名称"
+          value={draft.label}
+          onChangeText={(value) => setLineDraft((current) => (current ? { ...current, label: value } : current))}
+          placeholder="默认用药名"
+          accessibilityLabel="用药线名称"
+        />
+
+        <SwitchRow
+          label="设为主药"
+          hint="方案内只能有一条主药"
+          value={draft.isHost}
+          onValueChange={(value) =>
+            setLineDraft((current) =>
+              current ? { ...current, isHost: value, syncWithHost: value ? false : current.syncWithHost } : current,
+            )
+          }
+          last
+        />
+
+        <SwitchRow
+          label="跟随主药时间"
+          hint={hostExists ? '和主药同一天注射' : '方案里还没有主药，无法跟随'}
+          value={canSync && draft.syncWithHost}
+          onValueChange={(value) => setLineDraft((current) => (current ? { ...current, syncWithHost: value } : current))}
+          disabled={!canSync}
+          last
+        />
+
+        <Stepper
+          label={zh.settings.windowDays}
+          value={draft.windowDays}
+          onChange={(value) => setLineDraft((current) => (current ? { ...current, windowDays: value } : current))}
+          min={0}
+          max={30}
+          suffix={zh.common.unitDay}
+          decreaseLabel="按时窗口减少一天"
+          increaseLabel="按时窗口增加一天"
+        />
+
+        <View style={{ gap: theme.spacing.sm }}>
+          <Text style={{ color: theme.colors.text, fontSize: theme.fontSize.md, fontWeight: '600' }}>
+            {zh.settings.phases}
+          </Text>
+          {draft.phases.map((phase, index) => (
+            <View
+              key={`phase-${index}`}
+              style={{
+                borderWidth: StyleSheet.hairlineWidth,
+                borderColor: theme.colors.border,
+                borderRadius: theme.radius.md,
+                padding: theme.spacing.md,
+                gap: theme.spacing.md,
+                backgroundColor: theme.colors.surface,
+              }}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <Text style={{ flex: 1, color: theme.colors.text, fontSize: theme.fontSize.sm, fontWeight: '700' }}>
+                  阶段 {index + 1}
+                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`删除阶段 ${index + 1}`}
+                  accessibilityState={{ disabled: draft.phases.length <= 1 }}
+                  disabled={draft.phases.length <= 1}
+                  onPress={() =>
+                    setLineDraft((current) =>
+                      current
+                        ? { ...current, phases: current.phases.filter((_, i) => i !== index) }
+                        : current,
+                    )
+                  }
+                  style={({ pressed }) => [
+                    styles.iconButton,
+                    {
+                      borderRadius: theme.radius.sm,
+                      opacity: draft.phases.length <= 1 ? 0.35 : pressed ? 0.6 : 1,
+                    },
+                  ]}
+                >
+                  <Icon name="trash" size={18} color={theme.colors.danger} />
+                </Pressable>
+              </View>
+
+              <SegmentedControl<PhaseKind>
+                options={[
+                  { value: 'loading', label: zh.settings.phaseLoading },
+                  { value: 'maintenance', label: zh.settings.phaseMaintenance },
+                ]}
+                value={phase.kind}
+                onChange={(kind) =>
+                  setLineDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          phases: current.phases.map((item, i) => (i === index ? { ...item, kind } : item)),
+                        }
+                      : current,
+                  )
+                }
+                accessibilityLabel={`阶段 ${index + 1} 类型`}
+              />
+
+              <Stepper
+                label={zh.settings.intervalDays}
+                value={phase.intervalDays}
+                onChange={(value) =>
+                  setLineDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          phases: current.phases.map((item, i) =>
+                            i === index ? { ...item, intervalDays: value } : item,
+                          ),
+                        }
+                      : current,
+                  )
+                }
+                min={1}
+                max={365}
+                suffix={zh.common.unitDay}
+                decreaseLabel="间隔减少一天"
+                increaseLabel="间隔增加一天"
+              />
+
+              <Stepper
+                label={zh.settings.repeatCount}
+                value={phase.repeatCount}
+                onChange={(value) =>
+                  setLineDraft((current) =>
+                    current
+                      ? {
+                          ...current,
+                          phases: current.phases.map((item, i) =>
+                            i === index ? { ...item, repeatCount: value } : item,
+                          ),
+                        }
+                      : current,
+                  )
+                }
+                min={0}
+                max={52}
+                suffix="次"
+                decreaseLabel="重复次数减少"
+                increaseLabel="重复次数增加"
+              />
+
+              <View style={{ flexDirection: 'row', gap: theme.spacing.md }}>
+                <View style={{ flex: 1 }}>
+                  <TextField
+                    label={`${zh.settings.dose}（${zh.common.optional}）`}
+                    value={phase.doseText}
+                    onChangeText={(value) =>
+                      setLineDraft((current) =>
+                        current
+                          ? {
+                              ...current,
+                              phases: current.phases.map((item, i) =>
+                                i === index ? { ...item, doseText: value } : item,
+                              ),
+                            }
+                          : current,
+                      )
+                    }
+                    keyboardType="decimal-pad"
+                    placeholder="40"
+                    accessibilityLabel={`阶段 ${index + 1} 剂量`}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <TextField
+                    label="单位"
+                    value={phase.unit}
+                    onChangeText={(value) =>
+                      setLineDraft((current) =>
+                        current
+                          ? {
+                              ...current,
+                              phases: current.phases.map((item, i) => (i === index ? { ...item, unit: value } : item)),
+                            }
+                          : current,
+                      )
+                    }
+                    placeholder="mg"
+                    accessibilityLabel={`阶段 ${index + 1} 单位`}
+                  />
+                </View>
+              </View>
+            </View>
+          ))}
+          <Button
+            label={zh.settings.addPhase}
+            variant="outline"
+            icon="plus"
+            onPress={() =>
+              setLineDraft((current) => (current ? { ...current, phases: [...current.phases, defaultPhase()] } : current))
+            }
+          />
+        </View>
+      </>
+    )
+  }
+
+  const renderOralFields = (draft: LineDraft) => {
+    const eligible = [...medications].sort(
+      (a, b) => (a.route === 'oral' ? 0 : 1) - (b.route === 'oral' ? 0 : 1),
+    )
+    return (
+      <>
+        <View style={{ gap: 8 }}>
+          <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
+            {zh.form.medicationName}
+          </Text>
+          {draft.id ? (
+            <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
+              {medications.find((medication) => medication.id === draft.medicationId)?.name ??
+                '已选药物'}
+            </Text>
+          ) : (
+            <MedicationChips
+              medications={eligible}
+              value={draft.medicationId}
+              onSelect={(medication) =>
+                setLineDraft((current) =>
+                  current
+                    ? {
+                        ...current,
+                        medicationId: medication.id,
+                        label: current.label.trim() === '' ? medication.name : current.label,
+                      }
+                    : current,
+                )
+              }
+            />
+          )}
+        </View>
+
+        <TextField
+          label="用药线名称"
+          value={draft.label}
+          onChangeText={(value) => setLineDraft((current) => (current ? { ...current, label: value } : current))}
+          placeholder="默认用药名"
+          accessibilityLabel="用药线名称"
+        />
+
+        <DateTimeField
+          label="开始日期"
+          value={draft.oral.startDate}
+          onChange={(value) =>
+            setLineDraft((current) => (current ? { ...current, oral: { ...current.oral, startDate: value } } : current))
+          }
+        />
+
+        <TextField
+          label={`疗程天数（${zh.common.optional}）`}
+          value={draft.oral.durationText}
+          onChangeText={(value) =>
+            setLineDraft((current) =>
+              current ? { ...current, oral: { ...current.oral, durationText: value } } : current,
+            )
+          }
+          keyboardType="number-pad"
+          placeholder="留空表示长期"
+          hint="留空表示长期服用"
+          accessibilityLabel="疗程天数"
+        />
+
+        <View style={{ gap: 6 }}>
+          <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
+            服药频次
+          </Text>
+          <SegmentedControl<OralFrequency>
+            options={[
+              { value: 'daily', label: '每天' },
+              { value: 'weekly', label: '每周' },
+              { value: 'custom', label: '自定义' },
+            ]}
+            value={draft.oral.frequency}
+            onChange={(frequency) =>
+              setLineDraft((current) => (current ? { ...current, oral: { ...current.oral, frequency } } : current))
+            }
+            accessibilityLabel="服药频次"
+          />
+        </View>
+
+        {draft.oral.frequency !== 'daily' ? (
+          <Stepper
+            label="每个周期次数"
+            value={draft.oral.timesPerPeriod}
+            onChange={(value) =>
+              setLineDraft((current) =>
+                current ? { ...current, oral: { ...current.oral, timesPerPeriod: value } } : current,
+              )
+            }
+            min={1}
+            max={7}
+            suffix="次"
+            decreaseLabel="每周期次数减少"
+            increaseLabel="每周期次数增加"
+          />
+        ) : null}
+
+        {draft.oral.frequency !== 'daily' ? (
+          <View style={{ gap: 8 }}>
+            <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
+              服药星期（可多选）
+            </Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+              {WEEKDAY_LABELS.map((label, day) => (
+                <Chip
+                  key={day}
+                  label={label}
+                  selected={draft.oral.daysOfWeek.includes(day)}
+                  onPress={() =>
+                    setLineDraft((current) => {
+                      if (!current) return current
+                      const days = current.oral.daysOfWeek.includes(day)
+                        ? current.oral.daysOfWeek.filter((item) => item !== day)
+                        : [...current.oral.daysOfWeek, day].sort((a, b) => a - b)
+                      return { ...current, oral: { ...current.oral, daysOfWeek: days } }
+                    })
+                  }
+                  accessibilityLabel={label}
+                />
+              ))}
+            </View>
+          </View>
+        ) : null}
+
+        <TimeOfDayField
+          label="服药提醒时间"
+          value={draft.oral.remindTime}
+          onChange={(value) =>
+            setLineDraft((current) => (current ? { ...current, oral: { ...current.oral, remindTime: value } } : current))
+          }
+        />
+      </>
+    )
+  }
+
+  const renderLineForm = (draft: LineDraft) => (
+    <ScrollView
+      keyboardShouldPersistTaps="handled"
+      style={{ flex: 1 }}
+      contentContainerStyle={{
+        paddingHorizontal: theme.spacing.lg,
+        paddingBottom: theme.spacing.xl,
+        gap: theme.spacing.lg,
+      }}
+    >
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: theme.spacing.sm }}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={zh.common.back}
+          onPress={closeLine}
+          style={({ pressed }) => [
+            styles.iconButton,
+            { borderRadius: theme.radius.pill, opacity: pressed ? 0.6 : 1 },
+          ]}
+        >
+          <Icon name="chevron-left" size={22} color={theme.colors.text} />
+        </Pressable>
+        <Text style={{ flex: 1, color: theme.colors.text, fontSize: theme.fontSize.lg, fontWeight: '700' }}>
+          {editingKey ? '编辑用药线' : draft.kind === 'injection' ? '添加注射线' : '添加口服线'}
+        </Text>
+      </View>
+
+      {draft.kind === 'injection' ? renderInjectionFields(draft) : renderOralFields(draft)}
+
+      {error ? <InlineError message={error} /> : null}
+
+      <Button label={zh.common.confirm} onPress={commitLine} size="lg" />
+    </ScrollView>
+  )
+
+  return view === 'line' && lineDraft ? renderLineForm(lineDraft) : renderList()
+}
+
+// ---------------------------------------------------------------------------
+// 设置页
+// ---------------------------------------------------------------------------
+
 type DiseaseRow =
   | { type: 'header'; key: string; title: string }
   | { type: 'disease'; key: string; disease: Disease }
@@ -281,8 +1236,9 @@ export default function SettingsScreen() {
   const theme = useTheme()
   const router = useRouter()
   const ready = useAppStore((state) => state.ready)
-  const regimen = useAppStore((state) => state.regimen)
-  const medication = useAppStore((state) => state.medication)
+  const treatment = useAppStore((state) => state.treatment)
+  const treatments = useAppStore((state) => state.treatments)
+  const medicines = useAppStore((state) => state.medications)
   const disease = useAppStore((state) => state.disease)
   const diseases = useAppStore((state) => state.diseases)
   const symptomTags = useAppStore((state) => state.symptomTags)
@@ -292,6 +1248,7 @@ export default function SettingsScreen() {
   const reload = useAppStore((state) => state.reload)
   const updateReminder = useAppStore((state) => state.updateReminder)
   const updateSettings = useAppStore((state) => state.updateSettings)
+  const setActiveTreatment = useAppStore((state) => state.setActiveTreatment)
   const importRecords = useAppStore((state) => state.importRecords)
 
   const [reminderTime, setReminderTime] = useState('09:00')
@@ -302,10 +1259,7 @@ export default function SettingsScreen() {
   const [dndStart, setDndStart] = useState('22:00')
   const [dndEnd, setDndEnd] = useState('08:00')
 
-  const [switcherOpen, setSwitcherOpen] = useState(false)
-  const [regimenList, setRegimenList] = useState<Regimen[]>([])
-  const [loadingRegimens, setLoadingRegimens] = useState(false)
-  const [switchingId, setSwitchingId] = useState<string | null>(null)
+  const [editorOpen, setEditorOpen] = useState(false)
   const [deactivateOpen, setDeactivateOpen] = useState(false)
   const [deactivating, setDeactivating] = useState(false)
 
@@ -313,6 +1267,7 @@ export default function SettingsScreen() {
   const [diseaseSaving, setDiseaseSaving] = useState(false)
   const [diseaseDraft, setDiseaseDraft] = useState<string[]>([])
   const [tagManagerOpen, setTagManagerOpen] = useState(false)
+  const [medicationsOpen, setMedicationsOpen] = useState(false)
 
   const [lockBusy, setLockBusy] = useState(false)
   const [themeSaving, setThemeSaving] = useState(false)
@@ -339,8 +1294,11 @@ export default function SettingsScreen() {
   const [patientName, setPatientName] = useState('')
   const [rangeDays, setRangeDays] = useState(180)
   const [exportingCsv, setExportingCsv] = useState(false)
+  const [exportingExcel, setExportingExcel] = useState(false)
+  const [exportingJson, setExportingJson] = useState(false)
   const [exportingPdf, setExportingPdf] = useState(false)
   const [pendingImport, setPendingImport] = useState<ImportPayload | null>(null)
+  const [importPreview, setImportPreview] = useState<ImportResult | null>(null)
   const [importing, setImporting] = useState(false)
   const [importBusy, setImportBusy] = useState(false)
 
@@ -396,60 +1354,14 @@ export default function SettingsScreen() {
     return rows
   }, [])
 
-  const openSwitcher = async () => {
-    setSwitcherOpen(true)
-    setLoadingRegimens(true)
-    try {
-      const list = await regimenRepo.list()
-      setRegimenList(list)
-    } catch (error) {
-      setSwitcherOpen(false)
-      toast(errorMessage(error), 'error')
-    } finally {
-      setLoadingRegimens(false)
-    }
-  }
-
-  const activateRegimen = async (target: Regimen) => {
-    if (!target.isActive) {
-      setSwitchingId(target.id)
-      try {
-        await regimenRepo.setActive(target.id, true)
-        let warning: string | null = null
-        try {
-          await rescheduleAll()
-        } catch (error) {
-          warning = `提醒更新失败：${errorMessage(error)}`
-        }
-        await reload()
-        setSwitcherOpen(false)
-        toast('已切换当前方案', 'success')
-        if (warning) toast(warning, 'error')
-      } catch (error) {
-        toast(errorMessage(error), 'error')
-      } finally {
-        setSwitchingId(null)
-      }
-    } else {
-      setSwitcherOpen(false)
-    }
-  }
-
-  const deactivateRegimen = async () => {
-    if (!regimen) return
+  const deactivateTreatment = async () => {
+    if (!treatment) return
     setDeactivating(true)
     try {
-      await regimenRepo.setActive(regimen.id, false)
-      let warning: string | null = null
-      try {
-        await cancelAll()
-      } catch (error) {
-        warning = `取消提醒失败：${errorMessage(error)}`
-      }
-      await reload()
+      const result = await setActiveTreatment(treatment.id, false)
       setDeactivateOpen(false)
-      toast('当前方案已停用', 'success')
-      if (warning) toast(warning, 'error')
+      toast('当前治疗方案已停用', 'success')
+      if (result.notifyWarning) toast(result.notifyWarning, 'error')
     } catch (error) {
       toast(errorMessage(error), 'error')
     } finally {
@@ -493,14 +1405,15 @@ export default function SettingsScreen() {
     if (!reminder) {
       toast('尚未设置提醒，请先完成方案配置', 'error')
       return
-    }    if (reminderOffsets.length === 0) {
+    }
+    if (reminderOffsets.length === 0) {
       toast('至少选择一个提前提醒时间', 'error')
       return
     }
     setSavingReminder(true)
     try {
       const result = await updateReminder({
-        regimenId: reminder.regimenId,
+        treatmentId: reminder.treatmentId,
         offsets: reminderOffsets,
         timeOfDay: reminderTime,
         snoozeMinutes,
@@ -516,10 +1429,10 @@ export default function SettingsScreen() {
   }
 
   const createDefaultReminder = async () => {
-    if (!regimen) return
+    if (!treatment) return
     try {
       const result = await updateReminder({
-        regimenId: regimen.id,
+        treatmentId: treatment.id,
         offsets: [-2, -1, 0],
         timeOfDay: '09:00',
         snoozeMinutes: 10,
@@ -536,7 +1449,7 @@ export default function SettingsScreen() {
     if (!reminder) return
     try {
       const result = await updateReminder({
-        regimenId: reminder.regimenId,
+        treatmentId: reminder.treatmentId,
         offsets: reminderOffsets.length > 0 ? reminderOffsets : reminder.offsets,
         timeOfDay: reminderTime,
         snoozeMinutes,
@@ -612,7 +1525,16 @@ export default function SettingsScreen() {
       } else {
         throw new Error('只支持 .xlsx / .xls / .json 文件')
       }
+
+      setImportPreview(null)
       setPendingImport(payload)
+      try {
+        const preview = await previewImport(payload)
+        setImportPreview(preview)
+      } catch (error) {
+        setPendingImport(null)
+        toast(errorMessage(error), 'error')
+      }
     } catch (error) {
       toast(`读取失败：${errorMessage(error)}`, 'error')
     } finally {
@@ -626,15 +1548,17 @@ export default function SettingsScreen() {
     try {
       const { result, notifyWarning } = await importRecords(pendingImport)
       setPendingImport(null)
+      setImportPreview(null)
       const parts: string[] = []
       if (result.injections > 0) parts.push(`${result.injections} 条注射`)
+      if (result.oralLogs > 0) parts.push(`${result.oralLogs} 条口服`)
       if (result.symptoms > 0) parts.push(`${result.symptoms} 条症状`)
       if (result.skipped > 0) parts.push(`跳过 ${result.skipped} 条重复`)
+      if (result.skippedNoLine > 0) parts.push(`${result.skippedNoLine} 条找不到对应用药线`)
+      if (result.medicationsCreated > 0) parts.push(`新建 ${result.medicationsCreated} 种药物`)
+      if (result.linesCreated > 0) parts.push(`新建 ${result.linesCreated} 条用药线`)
       if (result.tags > 0) parts.push(`新增 ${result.tags} 个症状标签`)
-      toast(
-        parts.length === 0 ? '没有可导入的新记录' : `已导入：${parts.join('，')}`,
-        'success',
-      )
+      toast(parts.length === 0 ? '没有可导入的新记录' : `已导入：${parts.join('，')}`, 'success')
       if (notifyWarning) toast(notifyWarning, 'error')
     } catch (error) {
       toast(errorMessage(error), 'error')
@@ -643,7 +1567,8 @@ export default function SettingsScreen() {
     }
   }
 
-  const doExportCsv = async () => {    setExportingCsv(true)
+  const doExportCsv = async () => {
+    setExportingCsv(true)
     try {
       const file = await exportCsv()
       await shareFile(file.path)
@@ -652,6 +1577,32 @@ export default function SettingsScreen() {
       toast(errorMessage(error), 'error')
     } finally {
       setExportingCsv(false)
+    }
+  }
+
+  const doExportExcel = async () => {
+    setExportingExcel(true)
+    try {
+      const file = await exportExcel()
+      await shareFile(file.path)
+      toast(zh.disclaimer.exportWarning, 'default')
+    } catch (error) {
+      toast(errorMessage(error), 'error')
+    } finally {
+      setExportingExcel(false)
+    }
+  }
+
+  const doExportJson = async () => {
+    setExportingJson(true)
+    try {
+      const file = await exportJson()
+      await shareFile(file.path)
+      toast(zh.disclaimer.exportWarning, 'default')
+    } catch (error) {
+      toast(errorMessage(error), 'error')
+    } finally {
+      setExportingJson(false)
     }
   }
 
@@ -726,46 +1677,31 @@ export default function SettingsScreen() {
         }}
       >
         <SectionTitle title={zh.settings.regimenSection} />
-        {regimen ? (
+        {treatment ? (
           <Card>
             <View style={{ gap: theme.spacing.sm }}>
               <Text style={{ color: theme.colors.text, fontSize: theme.fontSize.lg, fontWeight: '700' }}>
-                {regimen.name}
+                {treatment.name}
               </Text>
-              <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
-                {medication ? medication.name : zh.common.unknown}
-                {medication?.genericName && medication.genericName !== medication.name
-                  ? `（${medication.genericName}）`
-                  : ''}
-              </Text>
-              <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.xs }}>
-                {regimen.anchor === 'actual' ? zh.settings.anchorActual : zh.settings.anchorPlanned} ·
-                按时窗口 ±{regimen.windowDays} 天
-              </Text>
-              <View style={{ gap: 4, marginTop: theme.spacing.xs }}>
-                {regimen.phases.map((phase, index) => (
+              <View style={{ gap: 4 }}>
+                {treatment.lines.map((line) => (
                   <Text
-                    key={phase.id}
-                    style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.xs }}
+                    key={line.id}
+                    style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}
                   >
-                    阶段 {index + 1} · {phase.kind === 'loading' ? zh.settings.phaseLoading : zh.settings.phaseMaintenance} ·
-                    每 {phase.intervalDays} 天
-                    {phase.repeatCount === 0 ? '（长期）' : ` × ${phase.repeatCount}`}
-                    {phase.dose !== null ? ` · ${phase.dose} ${phase.unit}` : ''}
+                    {describeLine(line, medicines)}
                   </Text>
                 ))}
               </View>
               <View style={{ flexDirection: 'row', gap: theme.spacing.md, marginTop: theme.spacing.sm }}>
                 <Button
-                  label="切换方案"
-                  onPress={() => {
-                    void openSwitcher()
-                  }}
+                  label="编辑治疗方案"
+                  onPress={() => setEditorOpen(true)}
                   variant="secondary"
                   style={{ flex: 1 }}
                 />
                 <Button
-                  label="停用方案"
+                  label="停用治疗方案"
                   onPress={() => setDeactivateOpen(true)}
                   variant="danger"
                   style={{ flex: 1 }}
@@ -777,14 +1713,60 @@ export default function SettingsScreen() {
           <Card>
             <StateView
               icon="plus"
-              title={zh.empty.todayNoRegimen}
-              message="先选择病种、药物与注射间隔。"
-              actionLabel="去设置"
-              onAction={() => router.push('/onboarding')}
+              title="还没有治疗方案"
+              message="添加药物与用药间隔，开始记录。"
+              actionLabel="新建治疗方案"
+              onAction={() => setEditorOpen(true)}
               compact
             />
           </Card>
         )}
+
+        {treatments.some((item) => !item.isActive) ? (
+          <>
+            <SectionTitle title="其他治疗方案" hint="停用的方案记录仍在，可随时重新启用" />
+            <RowGroup>
+              {treatments
+                .filter((item) => !item.isActive)
+                .map((item, index, list) => (
+                  <SettingRow
+                    key={item.id}
+                    label={item.name}
+                    hint={`${item.lines.length} 条用药线`}
+                    right={
+                      <Button
+                        label="启用"
+                        variant="secondary"
+                        onPress={() => {
+                          void (async () => {
+                            try {
+                              const result = await setActiveTreatment(item.id, true)
+                              toast('已切换治疗方案', 'success')
+                              if (result.notifyWarning) toast(result.notifyWarning, 'error')
+                            } catch (error) {
+                              toast(errorMessage(error), 'error')
+                            }
+                          })()
+                        }}
+                      />
+                    }
+                    last={index === list.length - 1}
+                  />
+                ))}
+            </RowGroup>
+          </>
+        ) : null}
+
+        <SectionTitle title="药物" hint="目录药由版本维护，自定义药可自行增删改" />
+        <RowGroup>
+          <SettingRow
+            label="我的药物"
+            hint="调整默认剂量，或添加目录外的药"
+            value={`${medicines.length} 种`}
+            onPress={() => setMedicationsOpen(true)}
+            last
+          />
+        </RowGroup>
 
         <SectionTitle title="病种" hint="可以多选；切换后会影响新建方案时的药物列表" />
         <RowGroup>
@@ -819,7 +1801,7 @@ export default function SettingsScreen() {
             hint={reminder ? undefined : zh.empty.settingsNoReminder}
             last={!reminder}
           />
-          {!reminder && regimen ? (
+          {!reminder && treatment ? (
             <View style={{ paddingHorizontal: theme.spacing.lg, paddingBottom: theme.spacing.lg, gap: 6 }}>
               <Button
                 label="创建默认提醒"
@@ -1009,6 +1991,30 @@ export default function SettingsScreen() {
             }
           />
           <SettingRow
+            label="导出 Excel（可编辑）"
+            hint="注射 / 口服 / 症状 / 药物 / 用药线，可用表格软件编辑"
+            value={exportingExcel ? '导出中…' : undefined}
+            onPress={
+              exportingExcel
+                ? undefined
+                : () => {
+                    void doExportExcel()
+                  }
+            }
+          />
+          <SettingRow
+            label="导出 JSON（可编辑）"
+            hint="可再次导入还原，适合备份或迁移"
+            value={exportingJson ? '导出中…' : undefined}
+            onPress={
+              exportingJson
+                ? undefined
+                : () => {
+                    void doExportJson()
+                  }
+            }
+          />
+          <SettingRow
             label={zh.settings.exportPdf}
             hint="可填写姓名，生成就诊报告"
             onPress={openPdf}
@@ -1025,7 +2031,7 @@ export default function SettingsScreen() {
         <RowGroup>
           <SettingRow
             label={zh.settings.clearData}
-            hint="删除全部注射、症状与方案，内置药物保留"
+            hint="删除全部注射、口服、症状与方案，内置药物保留"
             destructive
             onPress={() => setClearStage(1)}
             last
@@ -1045,59 +2051,18 @@ export default function SettingsScreen() {
         </Text>
       </ScrollArea>
 
-      <BottomSheet visible={switcherOpen} title="切换用药方案" onClose={() => setSwitcherOpen(false)}>
-        {loadingRegimens ? (
-          <StateView icon="activity" title="正在加载方案…" compact />
-        ) : (
-          <FlatList<Regimen>
-            data={regimenList}
-            keyExtractor={(item) => item.id}
-            contentContainerStyle={{ paddingHorizontal: theme.spacing.lg, paddingBottom: theme.spacing.lg, gap: 8 }}
-            renderItem={({ item }) => {
-              const active = item.id === regimen?.id
-              const busy = switchingId === item.id
-              return (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={item.name}
-                  accessibilityState={{ selected: active, busy }}
-                  disabled={switchingId !== null}
-                  onPress={() => {
-                    void activateRegimen(item)
-                  }}
-                  style={({ pressed }) => [
-                    styles.listRow,
-                    {
-                      borderColor: active ? theme.colors.primary : theme.colors.border,
-                      backgroundColor: active ? theme.colors.primaryMuted : theme.colors.surface,
-                      borderRadius: theme.radius.md,
-                      opacity: pressed ? 0.8 : 1,
-                    },
-                  ]}
-                >
-                  <View style={{ flex: 1, gap: 2 }}>
-                    <Text style={{ color: theme.colors.text, fontSize: theme.fontSize.md, fontWeight: '600' }}>
-                      {item.name}
-                    </Text>
-                    <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.xs }}>
-                      创建于 {formatDate(item.createdAt)} · {item.phases.length} 个阶段
-                    </Text>
-                  </View>
-                  {busy ? (
-                    <Text style={{ color: theme.colors.primary, fontSize: theme.fontSize.sm }}>切换中…</Text>
-                  ) : active ? (
-                    <Text style={{ color: theme.colors.primary, fontSize: theme.fontSize.sm, fontWeight: '600' }}>
-                      当前
-                    </Text>
-                  ) : (
-                    <Icon name="chevron-right" size={20} color={theme.colors.textTertiary} />
-                  )}
-                </Pressable>
-              )
-            }}
-            ListEmptyComponent={<StateView icon="inbox" title="暂无其他方案" compact />}
-          />
-        )}
+      <BottomSheet
+        visible={editorOpen}
+        title={treatment ? '编辑治疗方案' : '新建治疗方案'}
+        onClose={() => setEditorOpen(false)}
+        height="90%"
+      >
+        <TreatmentEditor
+          visible={editorOpen}
+          treatment={treatment}
+          medications={medicines}
+          onSaved={() => setEditorOpen(false)}
+        />
       </BottomSheet>
 
       <BottomSheet visible={diseaseOpen} title="选择病种（可多选）" onClose={() => setDiseaseOpen(false)}>
@@ -1279,18 +2244,43 @@ export default function SettingsScreen() {
         </ScrollView>
       </BottomSheet>
 
+      <BottomSheet
+        visible={medicationsOpen}
+        title="我的药物"
+        onClose={() => setMedicationsOpen(false)}
+        height="88%"
+      >
+        <ScrollView
+          style={{ flex: 1 }}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{
+            paddingHorizontal: theme.spacing.lg,
+            paddingBottom: theme.spacing.xl,
+          }}
+        >
+          <MedicationManager />
+        </ScrollView>
+      </BottomSheet>
+
       <ConfirmDialog
         visible={pendingImport !== null}
         title="导入数据"
         message={
           pendingImport
-            ? `将导入 ${pendingImport.injections.length} 条注射记录、${pendingImport.symptoms.length} 条症状记录。重复的记录会自动跳过，导入后可以逐条删除。`
+            ? importPreview
+              ? `将导入 ${importPreview.injections} 条注射、${importPreview.oralLogs} 条口服、${importPreview.symptoms} 条症状记录。` +
+                `将新建 ${importPreview.medicationsCreated} 种药物、${importPreview.linesCreated} 条用药线；${importPreview.skippedNoLine} 条找不到对应用药线会被跳过。` +
+                `重复的记录会自动跳过，导入后可以逐条删除。`
+              : `将导入 ${pendingImport.injections.length} 条注射、${pendingImport.oralLogs.length} 条口服、${pendingImport.symptoms.length} 条症状记录。重复的记录会自动跳过，导入后可以逐条删除。`
             : ''
         }
         confirmLabel="导入"
         busy={importing}
         onCancel={() => {
-          if (!importing) setPendingImport(null)
+          if (!importing) {
+            setPendingImport(null)
+            setImportPreview(null)
+          }
         }}
         onConfirm={() => {
           void runImport()
@@ -1321,8 +2311,8 @@ export default function SettingsScreen() {
       />
       <ConfirmDialog
         visible={deactivateOpen}
-        title="停用当前方案？"
-        message="停用后会取消所有已排程的提醒，历史记录仍会保留。可以随时在「切换方案」里重新启用。"
+        title="停用当前治疗方案？"
+        message="停用后会取消所有已排程的提醒，历史记录仍会保留。可以重新编辑并启用方案。"
         confirmLabel="停用"
         destructive
         busy={deactivating}
@@ -1330,7 +2320,7 @@ export default function SettingsScreen() {
           if (!deactivating) setDeactivateOpen(false)
         }}
         onConfirm={() => {
-          void deactivateRegimen()
+          void deactivateTreatment()
         }}
       />
     </Screen>
@@ -1343,6 +2333,12 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
   },
   closeButton: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  iconButton: {
     width: 44,
     height: 44,
     alignItems: 'center',
@@ -1362,5 +2358,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     padding: 14,
     minHeight: 60,
+  },
+  medChip: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    borderWidth: 1,
   },
 })

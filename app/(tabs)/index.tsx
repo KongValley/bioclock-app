@@ -1,22 +1,58 @@
-import { useCallback, useMemo } from 'react'
-import { StyleSheet, Text, View } from 'react-native'
+import { useCallback, useMemo, useState } from 'react'
+import { Text, View } from 'react-native'
 import { useRouter } from 'expo-router'
 import { useTheme } from '@/ui/theme'
 import { zh } from '@/i18n/zh'
 import { useAppStore, errorMessage as readError } from '@/store/app'
-import { nextDose, totalPlannedDoses } from '@/domain/schedule'
+import { buildSchedule, type SchedulePlan } from '@/domain/schedule'
 import { recommendSite, SITE_LABELS } from '@/domain/rotation'
 import { NOTIFY_PREP_HINT } from '@/notify/scheduler'
-import { DRUGS_BY_KEY } from '@/data/catalog'
+import type { DoseLogInput } from '@/db/repo'
+import type { DoseStatus, Injection, InjectionSite, Medication, TreatmentLine } from '@/types'
 import { Button } from '@/ui/components/Button'
 import { Card } from '@/ui/components/Card'
+import { Icon } from '@/ui/components/Icon'
 import { Screen, ScreenHeader, ScrollArea, SectionTitle, InlineError } from '@/ui/components/Layout'
 import { StateView } from '@/ui/components/StateView'
 import { Fab } from '@/ui/components/Fab'
 import { BodyMap } from '@/ui/components/BodyMap'
 import { toast } from '@/ui/components/Toast'
 import { useNow } from '@/ui/components/hooks'
-import { calendarDayDiff, formatDate, formatDateTimeFull, formatTime } from '@/ui/components/date'
+import { calendarDayDiff, formatDateTime, formatDateTimeFull } from '@/ui/components/date'
+
+/** treatment 为空时复用的稳定空数组，避免 useMemo 依赖每次变化。 */
+const NO_LINES: TreatmentLine[] = []
+
+type HeadlineTone = 'default' | 'primary' | 'danger'
+
+interface Headline {
+  text: string
+  tone: HeadlineTone
+}
+
+/** 注射线的下一步文案：还有 N 天 / 今天该注射了 / 已逾期 N 天。 */
+function injectionHeadline(plan: SchedulePlan, now: number): Headline {
+  const diff = calendarDayDiff(plan.plannedAt, now)
+  if (diff < 0) return { text: `${zh.today.overduePrefix} ${-diff} 天`, tone: 'danger' }
+  if (diff === 0) return { text: zh.today.countdownToday, tone: 'primary' }
+  if (diff === 1) return { text: '明天该注射', tone: 'default' }
+  return { text: `还有 ${diff} 天`, tone: 'default' }
+}
+
+/** 口服线的下一步文案：今天该服用 / 明天 / 下一剂时间。 */
+function oralHeadline(plan: SchedulePlan, now: number): Headline {
+  const diff = calendarDayDiff(plan.plannedAt, now)
+  if (diff < 0) return { text: `${zh.today.overduePrefix} ${-diff} 天`, tone: 'danger' }
+  if (diff === 0) return { text: '今天该服用', tone: 'primary' }
+  if (diff === 1) return { text: '明天服用', tone: 'default' }
+  return { text: `下一剂 ${formatDateTime(plan.plannedAt)}`, tone: 'default' }
+}
+
+function headlineColor(theme: ReturnType<typeof useTheme>, tone: HeadlineTone): string {
+  if (tone === 'danger') return theme.colors.danger
+  if (tone === 'primary') return theme.colors.primary
+  return theme.colors.text
+}
 
 export default function TodayScreen() {
   const theme = useTheme()
@@ -24,13 +60,15 @@ export default function TodayScreen() {
   const now = useNow()
   const ready = useAppStore((state) => state.ready)
   const error = useAppStore((state) => state.error)
-  const regimen = useAppStore((state) => state.regimen)
-  const medication = useAppStore((state) => state.medication)
+  const treatment = useAppStore((state) => state.treatment)
   const medications = useAppStore((state) => state.medications)
-  const disease = useAppStore((state) => state.disease)
-  const injections = useAppStore((state) => state.injections)
+  const doseLogs = useAppStore((state) => state.doseLogs)
+  const diseases = useAppStore((state) => state.diseases)
   const refreshing = useAppStore((state) => state.refreshing)
   const reload = useAppStore((state) => state.reload)
+  const addDoseLog = useAppStore((state) => state.addDoseLog)
+
+  const [busyLineId, setBusyLineId] = useState<string | null>(null)
 
   const refresh = useCallback(() => {
     reload().catch((err: unknown) => {
@@ -38,188 +76,232 @@ export default function TodayScreen() {
     })
   }, [reload])
 
-  const schedule = useMemo(() => {
-    if (!regimen) return null
-    return { regimen, injections, now }
-  }, [regimen, injections, now])
+  const medicationById = useMemo(() => {
+    const map = new Map<string, Medication>()
+    for (const med of medications) map.set(med.id, med)
+    return map
+  }, [medications])
 
-  const plan = useMemo(() => (schedule ? nextDose(schedule) : null), [schedule])
-  const total = regimen ? totalPlannedDoses(regimen.phases) : 0
-  const recommended = useMemo(
-    () => (medication?.route === 'sc' ? recommendSite(injections) : null),
-    [medication, injections],
+  const lines = treatment?.lines ?? NO_LINES
+
+  // 所有线的计划点（含历史），按 plannedAt 升序。
+  const plans = useMemo<SchedulePlan[]>(() => {
+    if (!treatment) return []
+    try {
+      return buildSchedule({ lines: treatment.lines, logs: doseLogs, now })
+    } catch {
+      // 参数异常时不要让首页崩溃，按「暂无排程」展示。
+      return []
+    }
+  }, [treatment, doseLogs, now])
+
+  // 每条线第一条未完成的计划（plans 已按时间升序，取首个即可）。
+  const nextPlanByLine = useMemo(() => {
+    const map = new Map<string, SchedulePlan>()
+    for (const plan of plans) {
+      if (plan.status === 'done' || plan.status === 'missed') continue
+      if (!map.has(plan.lineId)) map.set(plan.lineId, plan)
+    }
+    return map
+  }, [plans])
+
+  // 「今天要做」：每条线下一步里，今天到期或已逾期的计划。
+  const todoPlans = useMemo(() => {
+    const result: SchedulePlan[] = []
+    for (const line of lines) {
+      const plan = nextPlanByLine.get(line.id)
+      if (!plan) continue
+      if (plan.status !== 'due' && plan.status !== 'overdue') continue
+      if (calendarDayDiff(plan.plannedAt, now) > 0) continue
+      result.push(plan)
+    }
+    return result
+  }, [lines, nextPlanByLine, now])
+
+  const hostLine = useMemo(
+    () => lines.find((line) => line.kind === 'injection' && line.isHost) ?? null,
+    [lines],
+  )
+  const injectionLines = useMemo(
+    () => lines.filter((line) => line.kind === 'injection'),
+    [lines],
   )
 
-  const lastInjection = injections.length > 0 ? injections[injections.length - 1] : null
-  const lastInjectionRoute = lastInjection
-    ? medications.find((item) => item.id === lastInjection.medicationId)?.route
-    : undefined
-  const brandName = medication?.catalogKey
-    ? DRUGS_BY_KEY[medication.catalogKey]?.brandNames[0]
-    : undefined
-  const medicationTitle = medication
-    ? brandName
-      ? `${brandName} · ${medication.name}`
-      : medication.name
-    : undefined
+  const hostMedication = hostLine ? medicationById.get(hostLine.medicationId) : undefined
+  const showPrepHint = hostMedication?.route === 'sc'
+
+  const recommended = useMemo(() => {
+    if (!hostLine) return null
+    if (medicationById.get(hostLine.medicationId)?.route !== 'sc') return null
+    const history = doseLogs
+      .filter((log) => log.lineId === hostLine.id && log.site !== null)
+      .map((log) => ({
+        site: log.site as InjectionSite,
+        injectedAt: log.takenAt ?? log.scheduledAt ?? log.createdAt,
+      }))
+    return recommendSite(history as Injection[])
+  }, [hostLine, medicationById, doseLogs])
+
+  const openInjection = (lineId?: string) => {
+    if (lineId) {
+      router.push({ pathname: '/modal/injection', params: { lineId } })
+    } else {
+      router.push('/modal/injection')
+    }
+  }
+
+  const openOral = (lineId: string, scheduledAt?: number) => {
+    router.push({
+      pathname: '/modal/oral',
+      params: scheduledAt !== undefined ? { lineId, scheduledAt: String(scheduledAt) } : { lineId },
+    })
+  }
+
+  const openSymptom = () => router.push('/modal/symptom')
+
+  const markOral = async (plan: SchedulePlan, status: DoseStatus) => {
+    setBusyLineId(plan.lineId)
+    try {
+      const input: DoseLogInput = {
+        lineId: plan.lineId,
+        scheduledAt: plan.plannedAt,
+        takenAt: Date.now(),
+        status,
+      }
+      const result = await addDoseLog(input)
+      toast(status === 'done' ? '已记录服用' : '已跳过这次', 'success')
+      if (result.notifyWarning) toast(result.notifyWarning, 'error')
+    } catch (err) {
+      toast(readError(err), 'error')
+    } finally {
+      setBusyLineId(null)
+    }
+  }
 
   if (!ready) return null
 
-  const openInjection = () => router.push('/modal/injection')
-  const openSymptom = () => router.push('/modal/symptom')
-
-  const renderPlanCard = () => {
-    if (!regimen) {
-      return (
-        <Card>
-          <StateView
-            icon="plus"
-            title={zh.empty.todayNoRegimen}
-            message="选择病种和药物，设置注射间隔后，这里会显示下一次注射时间。"
-            actionLabel="去设置方案"
-            onAction={() => router.push('/onboarding')}
-            compact
-          />
-        </Card>
-      )
-    }
-
-    if (!plan) {
-      return (
-        <Card>
-          <StateView icon="syringe" title={zh.today.noSchedule} compact />
-        </Card>
-      )
-    }
-
-    const dayDiff = calendarDayDiff(plan.plannedAt, now)
-    const overdueDays = Math.max(1, calendarDayDiff(now, plan.plannedAt))
-    const isOverdue = plan.status === 'overdue'
-    const isDue = plan.status === 'due'
-
-    const headline = isOverdue
-      ? `${zh.today.overduePrefix} ${overdueDays} 天`
-      : isDue
-        ? dayDiff === 1
-          ? '明天该注射'
-          : dayDiff === -1
-            ? '已到注射时间'
-            : zh.today.countdownToday
-        : dayDiff > 0
-          ? `还有 ${dayDiff} 天`
-          : '即将到期'
-
-    const tone = isOverdue ? 'danger' : isDue ? 'primary' : 'default'
-    const headlineColor = isOverdue
-      ? theme.colors.danger
-      : isDue
-        ? theme.colors.primary
-        : theme.colors.text
-
-    const dose = plan.dose ?? medication?.defaultDose
-    const unit = plan.unit || medication?.unit || 'mg'
-    const routeLabel = medication?.route === 'iv' ? '医院输注' : '皮下注射'
-    const totalLabel = Number.isFinite(total)
-      ? `第 ${Math.min(plan.index + 1, total)} / ${total} 针`
-      : `第 ${plan.index + 1} 针`
+  const renderTodoCard = (plan: SchedulePlan) => {
+    const line = lines.find((item) => item.id === plan.lineId)
+    const medication = line ? medicationById.get(line.medicationId) : undefined
+    const medicationName = medication?.name ?? line?.label ?? '用药'
+    const isInjection = plan.kind === 'injection'
+    const headline = isInjection ? injectionHeadline(plan, now) : oralHeadline(plan, now)
+    const busy = busyLineId === plan.lineId
+    const tone: 'default' | 'primary' | 'danger' =
+      headline.tone === 'danger' ? 'danger' : headline.tone === 'primary' ? 'primary' : 'default'
 
     return (
-      <Card tone={tone}>
-        <Text
-          style={{
-            color: isOverdue ? theme.colors.danger : theme.colors.textSecondary,
-            fontSize: theme.fontSize.xs,
-            fontWeight: '600',
-            letterSpacing: 1,
-          }}
-        >
-          {isOverdue ? '已超过计划时间' : '下次注射'}
+      <Card key={plan.lineId} tone={tone}>
+        <Text style={{ color: theme.colors.text, fontSize: theme.fontSize.md, fontWeight: '600' }}>
+          {medicationName}
         </Text>
         <Text
-          accessibilityRole="header"
           style={{
-            color: headlineColor,
-            fontSize: theme.fontSize.display,
-            lineHeight: theme.lineHeight.display,
+            color: headlineColor(theme, headline.tone),
+            fontSize: theme.fontSize.lg,
             fontWeight: '700',
-            marginTop: 4,
-          }}
-        >
-          {headline}
-        </Text>
-        <Text
-          style={{
-            color: theme.colors.textSecondary,
-            fontSize: theme.fontSize.md,
             marginTop: 2,
           }}
         >
-          {formatDateTimeFull(plan.plannedAt)}
+          {headline.text}
+        </Text>
+        <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.xs, marginTop: 2 }}>
+          {isInjection ? '注射' : '口服'} · {formatDateTimeFull(plan.plannedAt)}
         </Text>
 
-        <View style={[styles.pillRow, { marginTop: theme.spacing.md }]}>
-          <View
-            style={[
-              styles.pill,
-              {
-                backgroundColor: theme.colors.surface,
-                borderColor: theme.colors.border,
-                borderRadius: theme.radius.pill,
-              },
-            ]}
-          >
-            <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.xs }}>
-              {totalLabel}
+        {isInjection ? (
+          <Button
+            label="登记注射"
+            onPress={() => openInjection(plan.lineId)}
+            style={{ marginTop: theme.spacing.md }}
+          />
+        ) : (
+          <View style={{ flexDirection: 'row', gap: theme.spacing.md, marginTop: theme.spacing.md }}>
+            <Button
+              label="完成"
+              onPress={() => {
+                void markOral(plan, 'done')
+              }}
+              loading={busy}
+              style={{ flex: 1 }}
+            />
+            <Button
+              label="跳过"
+              variant="secondary"
+              disabled={busy}
+              onPress={() => {
+                void markOral(plan, 'skipped')
+              }}
+              style={{ flex: 1 }}
+            />
+          </View>
+        )}
+      </Card>
+    )
+  }
+
+  const renderLineCard = (line: TreatmentLine) => {
+    const medication = medicationById.get(line.medicationId)
+    const plan = nextPlanByLine.get(line.id) ?? null
+    const isInjection = line.kind === 'injection'
+    const headline = plan ? (isInjection ? injectionHeadline(plan, now) : oralHeadline(plan, now)) : null
+    const dose = plan?.dose ?? medication?.defaultDose ?? null
+    const unit = plan?.unit || medication?.unit || 'mg'
+    const routeText = medication?.route === 'iv' ? ' · 医院输注' : ''
+
+    return (
+      <Card key={line.id}>
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: theme.spacing.sm }}>
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={{ color: theme.colors.text, fontSize: theme.fontSize.md, fontWeight: '600' }}>
+              {medication?.name ?? line.label}
+            </Text>
+            <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.xs }}>
+              {isInjection ? (line.isHost ? '注射 · 主药' : '注射') : '口服'}
+              {routeText}
             </Text>
           </View>
-          <View
-            style={[
-              styles.pill,
-              {
-                backgroundColor: theme.colors.surface,
-                borderColor: theme.colors.border,
-                borderRadius: theme.radius.pill,
-              },
-            ]}
-          >
-            <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.xs }}>
-              {dose !== null ? `${dose} ${unit}` : zh.common.notSet}
-            </Text>
-          </View>
-          <View
-            style={[
-              styles.pill,
-              {
-                backgroundColor: theme.colors.surface,
-                borderColor: theme.colors.border,
-                borderRadius: theme.radius.pill,
-              },
-            ]}
-          >
-            <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.xs }}>
-              {routeLabel}
-            </Text>
+          <View style={{ alignItems: 'flex-end', gap: 2 }}>
+            {headline ? (
+              <Text
+                style={{
+                  color: headlineColor(theme, headline.tone),
+                  fontSize: theme.fontSize.md,
+                  fontWeight: '700',
+                }}
+              >
+                {headline.text}
+              </Text>
+            ) : (
+              <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.sm }}>
+                {zh.today.noSchedule}
+              </Text>
+            )}
+            {plan ? (
+              <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.xs }}>
+                {formatDateTimeFull(plan.plannedAt)}
+              </Text>
+            ) : null}
           </View>
         </View>
-
-        <Button
-          label={isOverdue || isDue ? '立即登记' : zh.today.registerInjection}
-          onPress={openInjection}
-          size="lg"
-          variant={isOverdue ? 'danger' : 'primary'}
-          style={{ marginTop: theme.spacing.lg }}
-        />
-        {isOverdue ? (
+        {isInjection && dose !== null ? (
           <Text
             style={{
-              color: theme.colors.danger,
-              fontSize: theme.fontSize.xs,
-              textAlign: 'center',
-              marginTop: 8,
+              color: theme.colors.textSecondary,
+              fontSize: theme.fontSize.sm,
+              marginTop: theme.spacing.sm,
             }}
           >
-            如已注射请补登记，登记后会自动重算下次时间。
+            剂量 {dose} {unit}
           </Text>
+        ) : null}
+        {!isInjection ? (
+          <Button
+            label="口服打卡"
+            variant="secondary"
+            onPress={() => openOral(line.id, plan?.plannedAt)}
+            style={{ marginTop: theme.spacing.md }}
+          />
         ) : null}
       </Card>
     )
@@ -228,11 +310,17 @@ export default function TodayScreen() {
   return (
     <Screen>
       <ScreenHeader
-        title={disease?.name ?? zh.today.title}
-        subtitle={medicationTitle ?? (regimen ? undefined : '先把用药方案设置好')}
+        title={treatment?.name ?? zh.today.title}
+        subtitle={
+          treatment
+            ? diseases.length > 0
+              ? diseases.map((item) => item.name).join('、')
+              : '未选择病种'
+            : '先把治疗方案设置好'
+        }
       />
 
-      {error && injections.length === 0 ? (
+      {error && doseLogs.length === 0 ? (
         <View style={{ paddingHorizontal: theme.spacing.lg }}>
           <InlineError message={error} onRetry={refresh} />
         </View>
@@ -247,38 +335,44 @@ export default function TodayScreen() {
           gap: theme.spacing.lg,
         }}
       >
-        {renderPlanCard()}
-
-        {lastInjection ? (
+        {!treatment ? (
           <Card>
-            <SectionTitle title={zh.today.lastInjection} />
-            <View style={{ marginTop: theme.spacing.sm, gap: 4 }}>
-              <Text style={{ color: theme.colors.text, fontSize: theme.fontSize.md, fontWeight: '600' }}>
-                {formatDate(lastInjection.injectedAt)} {formatTime(lastInjection.injectedAt)}
-              </Text>
-              <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
-                {lastInjection.dose !== null ? `${lastInjection.dose} ${lastInjection.unit}` : '剂量未记录'}
-                {lastInjectionRoute === 'sc' ? ` · ${SITE_LABELS[lastInjection.site]}` : ''}
-              </Text>
-              {lastInjection.note ? (
-                <Text
-                  numberOfLines={2}
-                  style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.xs }}
-                >
-                  {lastInjection.note}
-                </Text>
-              ) : null}
+            <StateView
+              icon="plus"
+              title="还没有治疗方案"
+              message="选择病种和药物，设置注射间隔后，这里会显示下一步计划。"
+              actionLabel="去设置方案"
+              onAction={() => router.push('/onboarding')}
+              compact
+            />
+          </Card>
+        ) : lines.length === 0 ? (
+          <Card>
+            <StateView icon="syringe" title={zh.today.noSchedule} compact />
+          </Card>
+        ) : (
+          <>
+            <View style={{ gap: theme.spacing.md }}>
+              <SectionTitle title="今天要做" />
+              {todoPlans.length === 0 ? (
+                <Card>
+                  <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
+                    今天没有需要登记的项目，按计划进行即可。
+                  </Text>
+                </Card>
+              ) : (
+                todoPlans.map((plan) => renderTodoCard(plan))
+              )}
             </View>
-          </Card>
-        ) : regimen ? (
-          <Card>
-            <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
-              {zh.empty.todayNoInjection}
-            </Text>
-          </Card>
-        ) : null}
 
-        {recommended && medication?.route === 'sc' ? (
+            <View style={{ gap: theme.spacing.md }}>
+              <SectionTitle title="用药计划" hint="每一条用药线的下一步" />
+              {lines.map((line) => renderLineCard(line))}
+            </View>
+          </>
+        )}
+
+        {recommended && hostLine ? (
           <Card>
             <SectionTitle
               title={zh.today.recommendedSite}
@@ -301,7 +395,7 @@ export default function TodayScreen() {
           </Card>
         ) : null}
 
-        {medication?.route === 'sc' ? (
+        {showPrepHint ? (
           <View
             style={{
               flexDirection: 'row',
@@ -312,7 +406,7 @@ export default function TodayScreen() {
               padding: theme.spacing.md,
             }}
           >
-            <Text style={{ fontSize: theme.fontSize.md }}>❄</Text>
+            <Icon name="alert" size={18} color={theme.colors.warning} />
             <Text
               style={{
                 flex: 1,
@@ -346,26 +440,13 @@ export default function TodayScreen() {
         </Text>
       </ScrollArea>
 
-      {regimen ? (
+      {treatment && injectionLines.length > 0 ? (
         <Fab
           label={zh.today.registerInjection}
-          onPress={openInjection}
+          onPress={() => openInjection()}
           accessibilityLabel="登记一次注射"
         />
       ) : null}
     </Screen>
   )
 }
-
-const styles = StyleSheet.create({
-  pillRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-  },
-  pill: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-})
