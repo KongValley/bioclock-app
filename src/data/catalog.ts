@@ -859,10 +859,46 @@ export function drugsForDisease(diseaseId: string): Array<{ drug: CatalogDrug; e
     .sort((a, b) => Number(b.entry.firstLine) - Number(a.entry.firstLine))
 }
 
+/**
+ * 多个病种的可选药品并集。
+ * 同一种药被多个病种收录时只保留一条；只要在任一病种里是一线，就按一线排前面。
+ */
+export function drugsForDiseases(
+  diseaseIds: string[],
+): Array<{ drug: CatalogDrug; entry: DiseaseDrug }> {
+  const wanted = new Set(diseaseIds.filter((id) => id !== ''))
+  if (wanted.size === 0) return []
+
+  const byDrug = new Map<string, { drug: CatalogDrug; entry: DiseaseDrug }>()
+  for (const diseaseId of diseaseIds) {
+    if (!wanted.has(diseaseId)) continue
+    for (const entry of DISEASE_DRUGS) {
+      if (entry.diseaseId !== diseaseId) continue
+      const drug = DRUGS_BY_KEY[entry.drugKey]
+      if (!drug) continue
+      const existing = byDrug.get(drug.key)
+      if (!existing || (!existing.entry.firstLine && entry.firstLine)) {
+        byDrug.set(drug.key, { drug, entry })
+      }
+    }
+  }
+
+  return Array.from(byDrug.values()).sort(
+    (a, b) => Number(b.entry.firstLine) - Number(a.entry.firstLine),
+  )
+}
+
 /** 某药品覆盖的病种 id 列表，写入 medication.disease_ids。 */
 export function diseaseIdsForDrug(drugKey: string): string[] {
   return Array.from(
     new Set(DISEASE_DRUGS.filter((entry) => entry.drugKey === drugKey).map((e) => e.diseaseId)),
+  )
+}
+
+/** 多病种下某种药对应的方案模板（取第一个命中的病种）。 */
+export function regimenForDiseases(diseaseIds: string[], drugKey: string): DiseaseDrug | undefined {
+  return DISEASE_DRUGS.find(
+    (entry) => diseaseIds.includes(entry.diseaseId) && entry.drugKey === drugKey,
   )
 }
 

@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>BioClock 导入编辑器</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">✚</span>
+          <div>
+            <h1>BioClock 导入编辑器</h1>
+            <p>补录注射与症状，导出成 App 可以导入的 JSON 文件。</p>
+          </div>
+        </div>
+        <a class="ghost-link" href="https://github.com/KongValley/bioclock-app" target="_blank" rel="noreferrer">
+          项目仓库
+        </a>
+      </div>
+    </header>
+
+    <main class="page">
+      <section class="card intro">
+        <h2>怎么用</h2>
+        <ol class="steps">
+          <li>在下面按时间顺序补录注射和症状，点「添加」。</li>
+          <li>点「下载 JSON」，把文件发到手机（微信文件传输/数据线都行）。</li>
+          <li>手机上打开 BioClock → 设置 → 导入数据 → 选择这个文件。</li>
+        </ol>
+        <p class="note">
+          数据只保存在当前浏览器（localStorage），不会上传到任何服务器。换浏览器或清缓存会丢失，记得先下载备份。
+        </p>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>1. 我的病种</h2>
+          <p class="hint">可多选。同时有克罗恩病和强直性脊柱炎时，两边的药都会出现在药物下拉里。</p>
+        </div>
+        <div id="disease-chips" class="chips" role="group" aria-label="选择病种"></div>
+        <p id="disease-summary" class="note"></p>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>2. 补录记录</h2>
+          <p class="hint">时间按本地时间填写，App 里会原样保存。</p>
+        </div>
+
+        <div class="tabs" role="tablist" aria-label="记录类型">
+          <button class="tab is-active" role="tab" aria-selected="true" data-tab="injection" type="button">
+            注射记录 <span id="injection-count" class="pill">0</span>
+          </button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="symptom" type="button">
+            症状记录 <span id="symptom-count" class="pill">0</span>
+          </button>
+        </div>
+
+        <div id="panel-injection" class="panel">
+          <form id="injection-form" class="form-grid" novalidate>
+            <label class="field">
+              <span>注射时间 <b>*</b></span>
+              <input type="datetime-local" id="injection-time" required />
+            </label>
+
+            <label class="field">
+              <span>药物 <b>*</b></span>
+              <select id="injection-drug" required></select>
+            </label>
+
+            <div class="field-pair">
+              <label class="field">
+                <span>剂量</span>
+                <input type="number" id="injection-dose" step="any" min="0" placeholder="40" />
+              </label>
+              <label class="field">
+                <span>单位</span>
+                <input type="text" id="injection-unit" placeholder="mg" />
+              </label>
+            </div>
+
+            <label class="field">
+              <span>注射部位</span>
+              <select id="injection-site"></select>
+            </label>
+
+            <label class="field">
+              <span>批号</span>
+              <input type="text" id="injection-lot" placeholder="药盒上的批号，可留空" />
+            </label>
+
+            <label class="field field-wide">
+              <span>备注</span>
+              <textarea id="injection-note" rows="2" placeholder="注射后的感受、异常情况等"></textarea>
+            </label>
+
+            <div class="form-actions field-wide">
+              <button type="submit" class="primary" id="injection-submit">添加注射记录</button>
+              <button type="button" class="secondary" id="injection-cancel" hidden>取消编辑</button>
+              <span id="injection-error" class="error" role="status"></span>
+            </div>
+          </form>
+
+          <ul id="injection-list" class="record-list" aria-live="polite"></ul>
+        </div>
+
+        <div id="panel-symptom" class="panel" hidden>
+          <form id="symptom-form" class="form-grid" novalidate>
+            <label class="field">
+              <span>记录时间 <b>*</b></span>
+              <input type="datetime-local" id="symptom-time" required />
+            </label>
+
+            <label class="field">
+              <span>严重程度</span>
+              <select id="symptom-severity">
+                <option value="1">1 很轻</option>
+                <option value="2">2 较轻</option>
+                <option value="3" selected>3 中等</option>
+                <option value="4">4 较重</option>
+                <option value="5">5 严重</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>疼痛评分（NRS 0–10）</span>
+              <select id="symptom-pain">
+                <option value="">未记录</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>体温（℃）</span>
+              <input type="number" id="symptom-temperature" step="0.1" min="30" max="45" placeholder="36.8" />
+            </label>
+
+            <div class="field field-wide">
+              <span>症状（可多选）</span>
+              <div id="symptom-tags" class="chips" role="group" aria-label="选择症状"></div>
+              <div class="tag-add">
+                <input type="text" id="symptom-new-tag" maxlength="20" placeholder="没有想要的？输入自定义症状" />
+                <button type="button" class="secondary" id="symptom-add-tag">添加症状</button>
+              </div>
+            </div>
+
+            <label class="field">
+              <span>关联注射</span>
+              <select id="symptom-injection"></select>
+            </label>
+
+            <label class="field field-wide">
+              <span>备注</span>
+              <textarea id="symptom-note" rows="2" placeholder="症状出现的时间、持续多久、是否缓解…"></textarea>
+            </label>
+
+            <div class="form-actions field-wide">
+              <button type="submit" class="primary" id="symptom-submit">添加症状记录</button>
+              <button type="button" class="secondary" id="symptom-cancel" hidden>取消编辑</button>
+              <span id="symptom-error" class="error" role="status"></span>
+            </div>
+          </form>
+
+          <ul id="symptom-list" class="record-list" aria-live="polite"></ul>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>3. 导出并导入手机</h2>
+          <p class="hint">导出的 JSON 只包含你刚填的这几条记录；App 会自动跳过重复项。</p>
+        </div>
+
+        <div class="output-actions">
+          <button type="button" class="primary" id="download">下载 JSON</button>
+          <button type="button" class="secondary" id="copy">复制 JSON</button>
+          <label class="secondary file-button">
+            导入已有 JSON
+            <input type="file" id="load-file" accept="application/json,.json" hidden />
+          </label>
+          <button type="button" class="danger-ghost" id="clear">清空全部</button>
+          <span id="output-status" class="note" role="status"></span>
+        </div>
+
+        <details class="preview">
+          <summary>预览将要导出的内容</summary>
+          <pre id="json-preview"></pre>
+        </details>
+      </section>
+
+      <footer class="footer">
+        <p>BioClock 是个人记录工具，不提供诊断或用药建议。补录前请核对纸质记录或处方。</p>
+      </footer>
+    </main>
+
+    <script src="./src/meta.js"></script>
+    <script src="./src/app.js"></script>
+  </body>
+</html>

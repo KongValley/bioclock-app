@@ -19,8 +19,8 @@ import { DISEASE_DISCLAIMER, DISEASE_GROUPS, diseasesByGroup } from '@/data/dise
 import {
   DRUGS_BY_KEY,
   diseaseIdsForDrug,
-  drugsForDisease,
-  regimenFor,
+  drugsForDiseases,
+  regimenForDiseases,
 } from '@/data/catalog'
 import { medications as medicationRepo, regimens as regimenRepo, reminderRules, settings as settingsRepo } from '@/db/repo'
 import { rescheduleAll, ensurePermissions } from '@/notify/scheduler'
@@ -129,7 +129,7 @@ export default function OnboardingScreen() {
 
   const [step, setStep] = useState(0)
   const [query, setQuery] = useState('')
-  const [diseaseId, setDiseaseId] = useState<string | null>(null)
+  const [diseaseIds, setDiseaseIds] = useState<string[]>([])
 
   const [drugKey, setDrugKey] = useState<string | null>(null)
   const [customOpen, setCustomOpen] = useState(false)
@@ -155,10 +155,10 @@ export default function OnboardingScreen() {
   const [finishing, setFinishing] = useState(false)
   const [finishError, setFinishError] = useState<string | null>(null)
 
-  const entries = useMemo(() => (diseaseId ? drugsForDisease(diseaseId) : []), [diseaseId])
+  const entries = useMemo(() => drugsForDiseases(diseaseIds), [diseaseIds])
   const selectedEntry = useMemo(
-    () => (diseaseId && drugKey && drugKey !== CUSTOM_KEY ? regimenFor(diseaseId, drugKey) : undefined),
-    [diseaseId, drugKey],
+    () => (drugKey && drugKey !== CUSTOM_KEY ? regimenForDiseases(diseaseIds, drugKey) : undefined),
+    [diseaseIds, drugKey],
   )
 
   const selectedRoute: MedicationRoute =
@@ -218,12 +218,22 @@ export default function OnboardingScreen() {
   const preview = useMemo(() => buildPreview(phases), [phases])
 
   const selectDisease = (disease: Disease) => {
-    if (disease.id !== diseaseId) {
-      setDrugKey(null)
-      setCustomOpen(false)
-      setCustomError(null)
-    }
-    setDiseaseId(disease.id)
+    setDiseaseIds((current) => {
+      const next = current.includes(disease.id)
+        ? current.filter((id) => id !== disease.id)
+        : [...current, disease.id]
+
+      // 取消某个病种后，原先选的药可能就不再适用了。
+      if (drugKey && drugKey !== CUSTOM_KEY) {
+        const stillAvailable = drugsForDiseases(next).some((item) => item.drug.key === drugKey)
+        if (!stillAvailable) {
+          setDrugKey(null)
+          setCustomOpen(false)
+          setCustomError(null)
+        }
+      }
+      return next
+    })
   }
 
   const customProblem = (): string | null => {
@@ -244,8 +254,8 @@ export default function OnboardingScreen() {
 
   const goNext = () => {
     if (step === 0) {
-      if (!diseaseId) {
-        toast('请先选择病种')
+      if (diseaseIds.length === 0) {
+        toast('请至少选择一个病种')
         return
       }
       setStep(1)
@@ -360,7 +370,7 @@ export default function OnboardingScreen() {
 
   const finish = async () => {
     setFinishError(null)
-    if (!diseaseId || !drugKey) {
+    if (diseaseIds.length === 0 || !drugKey) {
       setFinishError('请先完成病种与药物选择。')
       return
     }
@@ -395,7 +405,7 @@ export default function OnboardingScreen() {
           unit: customUnit.trim(),
           color: theme.colors.primary,
           route: customRoute,
-          diseaseIds: [diseaseId],
+          diseaseIds,
           catalogKey: null,
           isBuiltin: false,
         })
@@ -444,7 +454,8 @@ export default function OnboardingScreen() {
         snoozeMinutes: 10,
         enabled: true,
       })
-      await settingsRepo.set('disease_id', diseaseId)
+      await settingsRepo.set('disease_ids', JSON.stringify(diseaseIds))
+      await settingsRepo.set('disease_id', diseaseIds[0] ?? '')
       await settingsRepo.set('onboarded_at', String(Date.now()))
       await settingsRepo.set('dnd_start', dndStart)
       await settingsRepo.set('dnd_end', dndEnd)
@@ -475,13 +486,13 @@ export default function OnboardingScreen() {
   }
 
   const stepTitles = [
-    '选择病种',
+    '选择病种（可多选）',
     zh.onboarding.chooseMedication,
     '确认用药方案',
     zh.onboarding.reminderTitle,
   ]
   const stepHints = [
-    '病种只用于缩小药物列表，不会上传任何信息。',
+    '同时有多种免疫介导疾病时可以多选，例如克罗恩病 + 强直性脊柱炎；病种只用于缩小药物列表。',
     '药名与剂量仅用于快速录入，请以医生处方为准。',
     zh.onboarding.loadingDoseHint,
     zh.onboarding.reminderHint,
@@ -515,6 +526,11 @@ export default function OnboardingScreen() {
           >
             找不到？可选择最接近的病种，或直接自定义药物。
           </Text>
+          {diseaseIds.length > 0 ? (
+            <Text style={{ color: theme.colors.primary, fontSize: theme.fontSize.xs }}>
+              已选 {diseaseIds.length} 个病种
+            </Text>
+          ) : null}
         </View>
       }
       ListFooterComponent={
@@ -553,12 +569,12 @@ export default function OnboardingScreen() {
             </Text>
           )
         }
-        const selected = item.disease.id === diseaseId
+        const selected = diseaseIds.includes(item.disease.id)
         return (
           <Pressable
-            accessibilityRole="button"
+            accessibilityRole="checkbox"
             accessibilityLabel={item.disease.name}
-            accessibilityState={{ selected }}
+            accessibilityState={{ checked: selected }}
             onPress={() => selectDisease(item.disease)}
             style={({ pressed }) => [
               styles.rowCard,
@@ -1291,7 +1307,7 @@ export default function OnboardingScreen() {
             <Button
               label={zh.common.next}
               onPress={goNext}
-              disabled={step === 0 ? !diseaseId : step === 1 ? !drugKey : false}
+              disabled={step === 0 ? diseaseIds.length === 0 : step === 1 ? !drugKey : false}
               style={{ flex: 2 }}
             />
           ) : (

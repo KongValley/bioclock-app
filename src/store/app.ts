@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { findDisease } from '@/data/diseases'
+import { findDiseases, resolveDiseaseIds } from '@/data/diseases'
 import {
   injections as injectionRepo,
   medications as medicationRepo,
@@ -10,6 +10,8 @@ import {
   symptomTags as symptomTagRepo,
 } from '@/db/repo'
 import { rescheduleAll } from '@/notify/scheduler'
+import { importPayload, type ImportResult } from '@/import'
+import type { ImportPayload } from '@/import/schema'
 import type {
   AppSettings,
   Disease,
@@ -41,6 +43,7 @@ export interface AppStore {
   medication: Medication | null
   medications: Medication[]
   disease: Disease | null
+  diseases: Disease[]
   injections: Injection[]
   symptoms: SymptomLog[]
   symptomTags: SymptomTag[]
@@ -58,6 +61,9 @@ export interface AppStore {
   removeSymptom(id: string): Promise<MutationResult>
   addSymptomTag(name: string): Promise<MutationResult>
   removeSymptomTag(id: string): Promise<MutationResult>
+  importRecords(
+    payload: ImportPayload,
+  ): Promise<{ result: ImportResult; notifyWarning: string | null }>
   updateReminder(input: Omit<ReminderRule, 'id'> & { id?: string }): Promise<MutationResult>
   updateSettings(patch: Record<string, string>): Promise<MutationResult>
 }
@@ -96,6 +102,7 @@ export const useAppStore = create<AppStore>((set) => ({
   medication: null,
   medications: [],
   disease: null,
+  diseases: [],
   injections: [],
   symptoms: [],
   symptomTags: [],
@@ -117,6 +124,7 @@ export const useAppStore = create<AppStore>((set) => ({
       const medication = active
         ? allMedications.find((item) => item.id === active.medicationId) ?? null
         : null
+      const diseases = findDiseases(resolveDiseaseIds(allSettings))
 
       set({
         ready: true,
@@ -125,7 +133,8 @@ export const useAppStore = create<AppStore>((set) => ({
         regimen: active,
         medication,
         medications: allMedications,
-        disease: findDisease(allSettings.disease_id) ?? null,
+        disease: diseases[0] ?? null,
+        diseases,
         injections: injectionList,
         symptoms: allSymptoms,
         symptomTags: allSymptomTags,
@@ -176,6 +185,11 @@ export const useAppStore = create<AppStore>((set) => ({
   removeSymptomTag: async (id) => {
     await symptomTagRepo.remove(id)
     return { notifyWarning: await afterWrite() }
+  },
+
+  importRecords: async (payload) => {
+    const result = await importPayload(payload)
+    return { result, notifyWarning: await afterWrite() }
   },
 
   updateReminder: async (input) => {

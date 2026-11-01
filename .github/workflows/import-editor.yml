@@ -1,0 +1,68 @@
+name: Deploy import editor
+
+# 把 tools/import-editor 部署到 GitHub Pages：
+# https://kongvalley.github.io/bioclock-app/
+#
+# 行动手之前需要：仓库 Settings → Pages → Source 选 "GitHub Actions"。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tools/import-editor/**'
+      - '.github/workflows/import-editor.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: import-editor-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # 病种/药名从 App 源码生成，保证网页和 App 数据一致
+      - run: npm run import-editor
+
+      - name: Check generated data is committed
+        run: |
+          git diff --exit-code -- tools/import-editor/src/meta.json tools/import-editor/src/meta.js \
+            || { echo "meta.json / meta.js 与源码不一致，请在本地运行 npm run import-editor 并提交"; exit 1; }
+
+      - name: Keep editor independent from the rest of the repo
+        run: |
+          node -e "
+            const fs = require('node:fs');
+            const p = JSON.parse(fs.readFileSync('tools/import-editor/package.json', 'utf8'));
+            p.private = true;
+            fs.writeFileSync('tools/import-editor/package.json', JSON.stringify(p, null, 2));
+          "
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: tools/import-editor
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

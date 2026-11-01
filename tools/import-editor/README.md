@@ -1,0 +1,60 @@
+# BioClock 导入编辑器
+
+一个纯静态网页工具：把纸质/记忆里的注射和症状补录成 BioClock 可以导入的 JSON。
+不需要登录、不联网、不上传数据，所有内容只存在浏览器 localStorage。
+
+## 打开方式
+
+**直接双击 `index.html`** 即可（`src/meta.js` 就是为了让 `file://` 也能读到病种/药物数据）。
+
+在线版：https://kongvalley.github.io/bioclock-app/ （推送到 `main` 后由 GitHub Actions 自动发布，
+见 `.github/workflows/import-editor.yml`）。
+
+如果浏览器限制本地文件，也可以在仓库根目录起一个静态服务：
+
+```bash
+npx serve tools/import-editor
+# 或
+python -m http.server 4173 --directory tools/import-editor
+```
+
+## 流程
+
+1. 选择病种（可多选，克罗恩病 + 强直性脊柱炎会合并药物列表）。
+2. 在「注射记录 / 症状记录」里逐条填写，点「添加」。
+3. 点「下载 JSON」，把文件传到手机。
+4. App 里：设置 → 导入数据 → 选择文件 → 确认。
+
+App 会按「时间 + 药 / 时间 + 严重程度 + 症状」跳过重复记录，重复导入同一个文件不会翻倍。
+
+## 字段与格式
+
+导出文件格式（同时也是 App 的导入格式）见仓库 [`docs/import-format.md`](../../docs/import-format.md)。
+
+## 修改这个工具
+
+```
+tools/import-editor/
+  index.html              页面结构
+  src/styles.css          样式（跟随系统深浅色）
+  src/app.js              全部交互逻辑（原生 JS，无框架）
+  src/meta.js             由脚本生成，勿手改
+  src/meta.json           同上，给需要 fetch 的场景
+  scripts/generate-meta.mjs  从 App 目录数据生成 meta
+  sample-import.json      示例文件
+```
+
+病种、药名、默认症状标签都来自 App 源码，不在这里手写。App 目录更新后，在仓库根目录执行：
+
+```bash
+npm run import-editor
+```
+
+这个脚本用 `@babel/core` 把 `src/data/diseases.ts`、`src/data/catalog.ts`、`src/domain/rotation.ts`、`src/i18n/zh.ts`
+转成运行时能 import 的 CommonJS，再导出 `meta.json` / `meta.js`。
+
+用 MiniMax Code 改这个工具时，注意：
+
+- 导出的 JSON 必须保持 `format: "bioclock-import"`、`version: 1`，字段名和 `docs/import-format.md` 一致。
+- 时间统一写本地时间字符串 `YYYY-MM-DD HH:mm`，不要写 ISO + Z。
+- 不要引入构建步骤或外部 CDN，保持双击可用。

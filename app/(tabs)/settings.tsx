@@ -14,6 +14,8 @@ import {
 } from 'react-native'
 import { useRouter } from 'expo-router'
 import Constants from 'expo-constants'
+import * as DocumentPicker from 'expo-document-picker'
+import { readAsStringAsync } from 'expo-file-system/legacy'
 import * as LocalAuthentication from 'expo-local-authentication'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useTheme } from '@/ui/theme'
@@ -24,7 +26,8 @@ import { resetDatabase } from '@/db'
 import { regimens as regimenRepo } from '@/db/repo'
 import { cancelAll, rescheduleAll } from '@/notify/scheduler'
 import { exportCsv, exportPdf, shareFile } from '@/export'
-import { DISEASE_GROUPS, diseasesByGroup } from '@/data/diseases'
+import { parseImportJson, type ImportPayload } from '@/import/schema'
+import { DISEASE_GROUPS, diseasesByGroup, diseasesLabel, resolveDiseaseIds } from '@/data/diseases'
 import type { Disease, Regimen } from '@/types'
 import { Button } from '@/ui/components/Button'
 import { Card } from '@/ui/components/Card'
@@ -40,7 +43,29 @@ import { TimeOfDayField } from '@/ui/components/TimeField'
 import { toast, ToastHost } from '@/ui/components/Toast'
 import { formatDate } from '@/ui/components/date'
 
+
 const PDF_RANGES = [90, 180, 365]
+
+/**
+ * 读取 DocumentPicker 选中的文件。
+ *
+ * Expo Go 里 expo-file-system 会拒绝读取 DocumentPicker 复制到缓存的文件
+ * （Missing 'READ' permission），但 React Native 的 fetch 直接走 Uri 读取，
+ * 不受这层权限校验影响；先试 fetch，失败再退回 expo-file-system。
+ */
+async function readPickedText(uri: string): Promise<string> {
+  try {
+    const response = await fetch(uri)
+    if (!response.ok) throw new Error(`读取文件失败（HTTP ${response.status}）`)
+    return await response.text()
+  } catch (error) {
+    try {
+      return await readAsStringAsync(uri)
+    } catch {
+      throw error instanceof Error ? error : new Error('读取文件失败')
+    }
+  }
+}
 
 function RowGroup({ children }: { children: ReactNode }) {
   return <Card padding={false}>{children}</Card>
@@ -250,6 +275,7 @@ export default function SettingsScreen() {
   const regimen = useAppStore((state) => state.regimen)
   const medication = useAppStore((state) => state.medication)
   const disease = useAppStore((state) => state.disease)
+  const diseases = useAppStore((state) => state.diseases)
   const symptomTags = useAppStore((state) => state.symptomTags)
   const settings = useAppStore((state) => state.settings)
   const reminder = useAppStore((state) => state.reminder)
@@ -257,6 +283,7 @@ export default function SettingsScreen() {
   const reload = useAppStore((state) => state.reload)
   const updateReminder = useAppStore((state) => state.updateReminder)
   const updateSettings = useAppStore((state) => state.updateSettings)
+  const importRecords = useAppStore((state) => state.importRecords)
 
   const [reminderTime, setReminderTime] = useState('09:00')
   const [reminderOffsets, setReminderOffsets] = useState<number[]>([-2, -1, 0])
@@ -275,6 +302,7 @@ export default function SettingsScreen() {
 
   const [diseaseOpen, setDiseaseOpen] = useState(false)
   const [diseaseSaving, setDiseaseSaving] = useState(false)
+  const [diseaseDraft, setDiseaseDraft] = useState<string[]>([])
   const [tagManagerOpen, setTagManagerOpen] = useState(false)
 
   const [lockBusy, setLockBusy] = useState(false)
@@ -303,6 +331,9 @@ export default function SettingsScreen() {
   const [rangeDays, setRangeDays] = useState(180)
   const [exportingCsv, setExportingCsv] = useState(false)
   const [exportingPdf, setExportingPdf] = useState(false)
+  const [pendingImport, setPendingImport] = useState<ImportPayload | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [importBusy, setImportBusy] = useState(false)
 
   const [disclaimerOpen, setDisclaimerOpen] = useState(false)
   const [clearStage, setClearStage] = useState<0 | 1 | 2>(0)
@@ -417,16 +448,30 @@ export default function SettingsScreen() {
     }
   }
 
-  const chooseDisease = async (item: Disease) => {
-    if (item.id === settings.disease_id) {
-      setDiseaseOpen(false)
+  const openDiseaseSheet = () => {
+    setDiseaseDraft(resolveDiseaseIds(settings))
+    setDiseaseOpen(true)
+  }
+
+  const toggleDiseaseDraft = (id: string) => {
+    setDiseaseDraft((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
+    )
+  }
+
+  const saveDiseases = async () => {
+    if (diseaseDraft.length === 0) {
+      toast('请至少选择一个病种', 'error')
       return
     }
     setDiseaseSaving(true)
     try {
-      const result = await updateSettings({ disease_id: item.id })
+      const result = await updateSettings({
+        disease_ids: JSON.stringify(diseaseDraft),
+        disease_id: diseaseDraft[0] ?? '',
+      })
       setDiseaseOpen(false)
-      toast('病种已切换', 'success')
+      toast('病种已更新', 'success')
       if (result.notifyWarning) toast(result.notifyWarning, 'error')
     } catch (error) {
       toast(errorMessage(error), 'error')
@@ -537,8 +582,52 @@ export default function SettingsScreen() {
     }
   }
 
-  const doExportCsv = async () => {
-    setExportingCsv(true)
+  const pickImportFile = async () => {
+    setImportBusy(true)
+    try {
+      const picked = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+        multiple: false,
+      })
+      if (picked.canceled) return
+      const asset = picked.assets?.[0]
+      if (!asset) return
+
+      const text = await readPickedText(asset.uri)
+      const payload = parseImportJson(text)
+      setPendingImport(payload)
+    } catch (error) {
+      toast(`读取失败：${errorMessage(error)}`, 'error')
+    } finally {
+      setImportBusy(false)
+    }
+  }
+
+  const runImport = async () => {
+    if (!pendingImport) return
+    setImporting(true)
+    try {
+      const { result, notifyWarning } = await importRecords(pendingImport)
+      setPendingImport(null)
+      const parts: string[] = []
+      if (result.injections > 0) parts.push(`${result.injections} 条注射`)
+      if (result.symptoms > 0) parts.push(`${result.symptoms} 条症状`)
+      if (result.skipped > 0) parts.push(`跳过 ${result.skipped} 条重复`)
+      if (result.tags > 0) parts.push(`新增 ${result.tags} 个症状标签`)
+      toast(
+        parts.length === 0 ? '没有可导入的新记录' : `已导入：${parts.join('，')}`,
+        'success',
+      )
+      if (notifyWarning) toast(notifyWarning, 'error')
+    } catch (error) {
+      toast(errorMessage(error), 'error')
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const doExportCsv = async () => {    setExportingCsv(true)
     try {
       const file = await exportCsv()
       await shareFile(file.path)
@@ -681,12 +770,12 @@ export default function SettingsScreen() {
           </Card>
         )}
 
-        <SectionTitle title="病种" hint="切换后会影响新建方案时的药物列表" />
+        <SectionTitle title="病种" hint="可以多选；切换后会影响新建方案时的药物列表" />
         <RowGroup>
           <SettingRow
-            label={disease?.name ?? '未选择病种'}
-            value="更改"
-            onPress={() => setDiseaseOpen(true)}
+            label="当前病种"
+            value={diseases.length > 0 ? diseases.map((item) => item.name).join('、') : '未选择病种'}
+            onPress={openDiseaseSheet}
             last
           />
         </RowGroup>
@@ -877,6 +966,21 @@ export default function SettingsScreen() {
         <SectionTitle title={zh.settings.exportSection} hint={zh.disclaimer.exportWarning} />
         <RowGroup>
           <SettingRow
+            label="导入数据"
+            hint={
+              importBusy
+                ? '正在读取文件…'
+                : '从 JSON 文件批量补录注射与症状，重复记录会自动跳过'
+            }
+            onPress={
+              importBusy
+                ? undefined
+                : () => {
+                    void pickImportFile()
+                  }
+            }
+          />
+          <SettingRow
             label={zh.settings.exportCsv}
             hint="全部注射与症状原始数据"
             value={exportingCsv ? '导出中…' : undefined}
@@ -980,11 +1084,11 @@ export default function SettingsScreen() {
         )}
       </BottomSheet>
 
-      <BottomSheet visible={diseaseOpen} title="切换病种" onClose={() => setDiseaseOpen(false)}>
+      <BottomSheet visible={diseaseOpen} title="选择病种（可多选）" onClose={() => setDiseaseOpen(false)}>
         <FlatList<DiseaseRow>
           data={diseaseRows}
           keyExtractor={(row) => row.key}
-          contentContainerStyle={{ paddingHorizontal: theme.spacing.lg, paddingBottom: theme.spacing.lg, gap: 8 }}
+          contentContainerStyle={{ paddingHorizontal: theme.spacing.lg, paddingBottom: 96, gap: 8 }}
           ListHeaderComponent={
             <Text
               style={{
@@ -994,7 +1098,7 @@ export default function SettingsScreen() {
                 paddingBottom: theme.spacing.sm,
               }}
             >
-              切换病种只会改变新建方案时的药物列表，当前方案与已有记录保持不变。
+              可以多选（例如同时有克罗恩病和强直性脊柱炎）。这里只改变新建方案时的药物列表，当前方案与已有记录保持不变。
             </Text>
           }
           renderItem={({ item }) => {
@@ -1013,16 +1117,14 @@ export default function SettingsScreen() {
                 </Text>
               )
             }
-            const selected = item.disease.id === settings.disease_id
+            const selected = diseaseDraft.includes(item.disease.id)
             return (
               <Pressable
-                accessibilityRole="button"
+                accessibilityRole="checkbox"
                 accessibilityLabel={item.disease.name}
-                accessibilityState={{ selected, disabled: diseaseSaving }}
+                accessibilityState={{ checked: selected, disabled: diseaseSaving }}
                 disabled={diseaseSaving}
-                onPress={() => {
-                  void chooseDisease(item.disease)
-                }}
+                onPress={() => toggleDiseaseDraft(item.disease.id)}
                 style={({ pressed }) => [
                   styles.listRow,
                   {
@@ -1037,16 +1139,34 @@ export default function SettingsScreen() {
                   {item.disease.name}
                 </Text>
                 {selected ? (
-                  <Text style={{ color: theme.colors.primary, fontSize: theme.fontSize.sm, fontWeight: '600' }}>
-                    当前
-                  </Text>
-                ) : (
-                  <Icon name="chevron-right" size={20} color={theme.colors.textTertiary} />
-                )}
+                  <Icon name="check" size={20} color={theme.colors.primary} strokeWidth={2.5} />
+                ) : null}
               </Pressable>
             )
           }}
         />
+        <View
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            bottom: 0,
+            paddingHorizontal: theme.spacing.lg,
+            paddingVertical: theme.spacing.md,
+            borderTopWidth: StyleSheet.hairlineWidth,
+            borderTopColor: theme.colors.border,
+            backgroundColor: theme.colors.background,
+          }}
+        >
+          <Button
+            label={`保存（已选 ${diseaseDraft.length} 个）`}
+            onPress={() => {
+              void saveDiseases()
+            }}
+            loading={diseaseSaving}
+            disabled={diseaseDraft.length === 0}
+          />
+        </View>
       </BottomSheet>
 
       <BottomSheet visible={pdfOpen} title={zh.settings.exportPdf} onClose={() => setPdfOpen(false)} height="80%">
@@ -1142,6 +1262,24 @@ export default function SettingsScreen() {
           <SymptomTagManager />
         </ScrollView>
       </BottomSheet>
+
+      <ConfirmDialog
+        visible={pendingImport !== null}
+        title="导入数据"
+        message={
+          pendingImport
+            ? `将导入 ${pendingImport.injections.length} 条注射记录、${pendingImport.symptoms.length} 条症状记录。重复的记录会自动跳过，导入后可以逐条删除。`
+            : ''
+        }
+        confirmLabel="导入"
+        busy={importing}
+        onCancel={() => {
+          if (!importing) setPendingImport(null)
+        }}
+        onConfirm={() => {
+          void runImport()
+        }}
+      />
 
       <ConfirmDialog
         visible={clearStage > 0}

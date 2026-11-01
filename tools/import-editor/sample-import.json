@@ -1,0 +1,33 @@
+{
+  "format": "bioclock-import",
+  "version": 1,
+  "injections": [
+    {
+      "injectedAt": "2026-03-15 09:00",
+      "medication": "阿达木单抗",
+      "dose": 40,
+      "unit": "mg",
+      "site": "abdomen_ul",
+      "lotNumber": "AB12345",
+      "note": "第 1 针，护士教的手法"
+    },
+    {
+      "injectedAt": "2026-03-29 09:10",
+      "medication": "阿达木单抗",
+      "dose": 40,
+      "unit": "mg",
+      "site": "thigh_l"
+    }
+  ],
+  "symptoms": [
+    {
+      "loggedAt": "2026-03-30 20:30",
+      "severity": 4,
+      "painScore": 6,
+      "tags": ["发热", "乏力", "关节痛"],
+      "temperature": 37.8,
+      "note": "注射后第二天下午开始，晚上缓解",
+      "injectionAt": "2026-03-29 09:10"
+    }
+  ]
+}

@@ -56,3 +56,8 @@ coverage/
 /android
 .expo-verify/
 dist/
+
+# import-editor Éú³É»º´æ
+tools/import-editor/scripts/.cache/
+tools/import-editor/scripts/.build/
+

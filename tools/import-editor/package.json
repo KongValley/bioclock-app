@@ -1,0 +1,9 @@
+{
+  "name": "bioclock-import-editor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "BioClock 补录数据并导出导入 JSON 的静态网页工具",
+  "scripts": {
+    "serve": "npx --yes serve ."
+  }
+}

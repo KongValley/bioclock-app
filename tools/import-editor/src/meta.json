@@ -1,0 +1,1114 @@
+{
+  "generatedAt": "2026-10-31T19:01:20.286Z",
+  "diseaseOptions": [
+    {
+      "id": "crohn",
+      "name": "克罗恩病",
+      "group": "炎症性肠病"
+    },
+    {
+      "id": "uc",
+      "name": "溃疡性结肠炎",
+      "group": "炎症性肠病"
+    },
+    {
+      "id": "psoriasis",
+      "name": "银屑病",
+      "group": "皮肤疾病"
+    },
+    {
+      "id": "psa",
+      "name": "银屑病关节炎",
+      "group": "关节与脊柱"
+    },
+    {
+      "id": "as",
+      "name": "强直性脊柱炎",
+      "group": "关节与脊柱"
+    },
+    {
+      "id": "ra",
+      "name": "类风湿关节炎",
+      "group": "关节与脊柱"
+    },
+    {
+      "id": "ad",
+      "name": "特应性皮炎",
+      "group": "皮肤疾病"
+    },
+    {
+      "id": "csu",
+      "name": "慢性自发性荨麻疹",
+      "group": "皮肤疾病"
+    },
+    {
+      "id": "sle",
+      "name": "系统性红斑狼疮",
+      "group": "其他免疫介导疾病"
+    },
+    {
+      "id": "hs",
+      "name": "化脓性汗腺炎",
+      "group": "皮肤疾病"
+    },
+    {
+      "id": "asthma_eos",
+      "name": "重度嗜酸性哮喘",
+      "group": "其他免疫介导疾病"
+    },
+    {
+      "id": "uveitis",
+      "name": "非感染性葡萄膜炎",
+      "group": "其他免疫介导疾病"
+    }
+  ],
+  "drugsByDisease": {
+    "crohn": [
+      {
+        "key": "adalimumab",
+        "name": "阿达木单抗",
+        "genericName": "阿达木单抗",
+        "brandNames": [
+          "修美乐",
+          "格乐立",
+          "安健宁",
+          "苏立信",
+          "汉达远",
+          "君迈康",
+          "安佳润",
+          "泰博维"
+        ],
+        "route": "sc",
+        "defaultDose": 40,
+        "unit": "mg"
+      },
+      {
+        "key": "infliximab",
+        "name": "英夫利西单抗",
+        "genericName": "英夫利西单抗",
+        "brandNames": [
+          "类克",
+          "类停",
+          "安佰特",
+          "佳佑健"
+        ],
+        "route": "iv",
+        "defaultDose": 5,
+        "unit": "mg/kg"
+      },
+      {
+        "key": "ustekinumab",
+        "name": "乌司奴单抗",
+        "genericName": "乌司奴单抗",
+        "brandNames": [
+          "喜达诺"
+        ],
+        "route": "sc",
+        "defaultDose": 90,
+        "unit": "mg"
+      },
+      {
+        "key": "vedolizumab",
+        "name": "维得利珠单抗",
+        "genericName": "维得利珠单抗",
+        "brandNames": [
+          "安吉优"
+        ],
+        "route": "iv",
+        "defaultDose": 300,
+        "unit": "mg"
+      },
+      {
+        "key": "risankizumab",
+        "name": "瑞莎珠单抗",
+        "genericName": "瑞莎珠单抗",
+        "brandNames": [
+          "Skyrizi"
+        ],
+        "route": "sc",
+        "defaultDose": 150,
+        "unit": "mg"
+      }
+    ],
+    "uc": [
+      {
+        "key": "infliximab",
+        "name": "英夫利西单抗",
+        "genericName": "英夫利西单抗",
+        "brandNames": [
+          "类克",
+          "类停",
+          "安佰特",
+          "佳佑健"
+        ],
+        "route": "iv",
+        "defaultDose": 5,
+        "unit": "mg/kg"
+      },
+      {
+        "key": "adalimumab",
+        "name": "阿达木单抗",
+        "genericName": "阿达木单抗",
+        "brandNames": [
+          "修美乐",
+          "格乐立",
+          "安健宁",
+          "苏立信",
+          "汉达远",
+          "君迈康",
+          "安佳润",
+          "泰博维"
+        ],
+        "route": "sc",
+        "defaultDose": 40,
+        "unit": "mg"
+      },
+      {
+        "key": "vedolizumab",
+        "name": "维得利珠单抗",
+        "genericName": "维得利珠单抗",
+        "brandNames": [
+          "安吉优"
+        ],
+        "route": "iv",
+        "defaultDose": 300,
+        "unit": "mg"
+      },
+      {
+        "key": "ustekinumab",
+        "name": "乌司奴单抗",
+        "genericName": "乌司奴单抗",
+        "brandNames": [
+          "喜达诺"
+        ],
+        "route": "sc",
+        "defaultDose": 90,
+        "unit": "mg"
+      },
+      {
+        "key": "golimumab",
+        "name": "戈利木单抗",
+        "genericName": "戈利木单抗",
+        "brandNames": [
+          "欣普尼"
+        ],
+        "route": "sc",
+        "defaultDose": 50,
+        "unit": "mg"
+      }
+    ],
+    "psoriasis": [
+      {
+        "key": "secukinumab",
+        "name": "司库奇尤单抗",
+        "genericName": "司库奇尤单抗",
+        "brandNames": [
+          "可善挺"
+        ],
+        "route": "sc",
+        "defaultDose": 300,
+        "unit": "mg"
+      },
+      {
+        "key": "ixekizumab",
+        "name": "依奇珠单抗",
+        "genericName": "依奇珠单抗",
+        "brandNames": [
+          "拓咨"
+        ],
+        "route": "sc",
+        "defaultDose": 80,
+        "unit": "mg"
+      },
+      {
+        "key": "adalimumab",
+        "name": "阿达木单抗",
+        "genericName": "阿达木单抗",
+        "brandNames": [
+          "修美乐",
+          "格乐立",
+          "安健宁",
+          "苏立信",
+          "汉达远",
+          "君迈康",
+          "安佳润",
+          "泰博维"
+        ],
+        "route": "sc",
+        "defaultDose": 40,
+        "unit": "mg"
+      },
+      {
+        "key": "ustekinumab",
+        "name": "乌司奴单抗",
+        "genericName": "乌司奴单抗",
+        "brandNames": [
+          "喜达诺"
+        ],
+        "route": "sc",
+        "defaultDose": 90,
+        "unit": "mg"
+      },
+      {
+        "key": "guselkumab",
+        "name": "古塞奇尤单抗",
+        "genericName": "古塞奇尤单抗",
+        "brandNames": [
+          "特诺雅"
+        ],
+        "route": "sc",
+        "defaultDose": 100,
+        "unit": "mg"
+      },
+      {
+        "key": "risankizumab",
+        "name": "瑞莎珠单抗",
+        "genericName": "瑞莎珠单抗",
+        "brandNames": [
+          "Skyrizi"
+        ],
+        "route": "sc",
+        "defaultDose": 150,
+        "unit": "mg"
+      },
+      {
+        "key": "etanercept",
+        "name": "依那西普",
+        "genericName": "依那西普",
+        "brandNames": [
+          "恩利"
+        ],
+        "route": "sc",
+        "defaultDose": 50,
+        "unit": "mg"
+      },
+      {
+        "key": "tnfr_fc",
+        "name": "重组人Ⅱ型 TNF 受体-抗体融合蛋白",
+        "genericName": "重组人Ⅱ型肿瘤坏死因子受体-抗体融合蛋白",
+        "brandNames": [
+          "益赛普",
+          "强克",
+          "安佰诺"
+        ],
+        "route": "sc",
+        "defaultDose": 25,
+        "unit": "mg"
+      }
+    ],
+    "psa": [
+      {
+        "key": "secukinumab",
+        "name": "司库奇尤单抗",
+        "genericName": "司库奇尤单抗",
+        "brandNames": [
+          "可善挺"
+        ],
+        "route": "sc",
+        "defaultDose": 300,
+        "unit": "mg"
+      },
+      {
+        "key": "adalimumab",
+        "name": "阿达木单抗",
+        "genericName": "阿达木单抗",
+        "brandNames": [
+          "修美乐",
+          "格乐立",
+          "安健宁",
+          "苏立信",
+          "汉达远",
+          "君迈康",
+          "安佳润",
+          "泰博维"
+        ],
+        "route": "sc",
+        "defaultDose": 40,
+        "unit": "mg"
+      },
+      {
+        "key": "etanercept",
+        "name": "依那西普",
+        "genericName": "依那西普",
+        "brandNames": [
+          "恩利"
+        ],
+        "route": "sc",
+        "defaultDose": 50,
+        "unit": "mg"
+      },
+      {
+        "key": "tnfr_fc",
+        "name": "重组人Ⅱ型 TNF 受体-抗体融合蛋白",
+        "genericName": "重组人Ⅱ型肿瘤坏死因子受体-抗体融合蛋白",
+        "brandNames": [
+          "益赛普",
+          "强克",
+          "安佰诺"
+        ],
+        "route": "sc",
+        "defaultDose": 25,
+        "unit": "mg"
+      },
+      {
+        "key": "ixekizumab",
+        "name": "依奇珠单抗",
+        "genericName": "依奇珠单抗",
+        "brandNames": [
+          "拓咨"
+        ],
+        "route": "sc",
+        "defaultDose": 80,
+        "unit": "mg"
+      },
+      {
+        "key": "ustekinumab",
+        "name": "乌司奴单抗",
+        "genericName": "乌司奴单抗",
+        "brandNames": [
+          "喜达诺"
+        ],
+        "route": "sc",
+        "defaultDose": 90,
+        "unit": "mg"
+      },
+      {
+        "key": "guselkumab",
+        "name": "古塞奇尤单抗",
+        "genericName": "古塞奇尤单抗",
+        "brandNames": [
+          "特诺雅"
+        ],
+        "route": "sc",
+        "defaultDose": 100,
+        "unit": "mg"
+      },
+      {
+        "key": "golimumab",
+        "name": "戈利木单抗",
+        "genericName": "戈利木单抗",
+        "brandNames": [
+          "欣普尼"
+        ],
+        "route": "sc",
+        "defaultDose": 50,
+        "unit": "mg"
+      },
+      {
+        "key": "certolizumab",
+        "name": "赛妥珠单抗",
+        "genericName": "聚乙二醇化赛妥珠单抗",
+        "brandNames": [
+          "希敏佳"
+        ],
+        "route": "sc",
+        "defaultDose": 200,
+        "unit": "mg"
+      }
+    ],
+    "as": [
+      {
+        "key": "adalimumab",
+        "name": "阿达木单抗",
+        "genericName": "阿达木单抗",
+        "brandNames": [
+          "修美乐",
+          "格乐立",
+          "安健宁",
+          "苏立信",
+          "汉达远",
+          "君迈康",
+          "安佳润",
+          "泰博维"
+        ],
+        "route": "sc",
+        "defaultDose": 40,
+        "unit": "mg"
+      },
+      {
+        "key": "etanercept",
+        "name": "依那西普",
+        "genericName": "依那西普",
+        "brandNames": [
+          "恩利"
+        ],
+        "route": "sc",
+        "defaultDose": 50,
+        "unit": "mg"
+      },
+      {
+        "key": "secukinumab",
+        "name": "司库奇尤单抗",
+        "genericName": "司库奇尤单抗",
+        "brandNames": [
+          "可善挺"
+        ],
+        "route": "sc",
+        "defaultDose": 300,
+        "unit": "mg"
+      },
+      {
+        "key": "tnfr_fc",
+        "name": "重组人Ⅱ型 TNF 受体-抗体融合蛋白",
+        "genericName": "重组人Ⅱ型肿瘤坏死因子受体-抗体融合蛋白",
+        "brandNames": [
+          "益赛普",
+          "强克",
+          "安佰诺"
+        ],
+        "route": "sc",
+        "defaultDose": 25,
+        "unit": "mg"
+      },
+      {
+        "key": "ixekizumab",
+        "name": "依奇珠单抗",
+        "genericName": "依奇珠单抗",
+        "brandNames": [
+          "拓咨"
+        ],
+        "route": "sc",
+        "defaultDose": 80,
+        "unit": "mg"
+      },
+      {
+        "key": "golimumab",
+        "name": "戈利木单抗",
+        "genericName": "戈利木单抗",
+        "brandNames": [
+          "欣普尼"
+        ],
+        "route": "sc",
+        "defaultDose": 50,
+        "unit": "mg"
+      },
+      {
+        "key": "certolizumab",
+        "name": "赛妥珠单抗",
+        "genericName": "聚乙二醇化赛妥珠单抗",
+        "brandNames": [
+          "希敏佳"
+        ],
+        "route": "sc",
+        "defaultDose": 200,
+        "unit": "mg"
+      },
+      {
+        "key": "infliximab",
+        "name": "英夫利西单抗",
+        "genericName": "英夫利西单抗",
+        "brandNames": [
+          "类克",
+          "类停",
+          "安佰特",
+          "佳佑健"
+        ],
+        "route": "iv",
+        "defaultDose": 5,
+        "unit": "mg/kg"
+      }
+    ],
+    "ra": [
+      {
+        "key": "adalimumab",
+        "name": "阿达木单抗",
+        "genericName": "阿达木单抗",
+        "brandNames": [
+          "修美乐",
+          "格乐立",
+          "安健宁",
+          "苏立信",
+          "汉达远",
+          "君迈康",
+          "安佳润",
+          "泰博维"
+        ],
+        "route": "sc",
+        "defaultDose": 40,
+        "unit": "mg"
+      },
+      {
+        "key": "etanercept",
+        "name": "依那西普",
+        "genericName": "依那西普",
+        "brandNames": [
+          "恩利"
+        ],
+        "route": "sc",
+        "defaultDose": 50,
+        "unit": "mg"
+      },
+      {
+        "key": "tocilizumab",
+        "name": "托珠单抗",
+        "genericName": "托珠单抗",
+        "brandNames": [
+          "雅美罗",
+          "安佰欣"
+        ],
+        "route": "iv",
+        "defaultDose": 8,
+        "unit": "mg/kg"
+      },
+      {
+        "key": "tnfr_fc",
+        "name": "重组人Ⅱ型 TNF 受体-抗体融合蛋白",
+        "genericName": "重组人Ⅱ型肿瘤坏死因子受体-抗体融合蛋白",
+        "brandNames": [
+          "益赛普",
+          "强克",
+          "安佰诺"
+        ],
+        "route": "sc",
+        "defaultDose": 25,
+        "unit": "mg"
+      },
+      {
+        "key": "golimumab",
+        "name": "戈利木单抗",
+        "genericName": "戈利木单抗",
+        "brandNames": [
+          "欣普尼"
+        ],
+        "route": "sc",
+        "defaultDose": 50,
+        "unit": "mg"
+      },
+      {
+        "key": "certolizumab",
+        "name": "赛妥珠单抗",
+        "genericName": "聚乙二醇化赛妥珠单抗",
+        "brandNames": [
+          "希敏佳"
+        ],
+        "route": "sc",
+        "defaultDose": 200,
+        "unit": "mg"
+      },
+      {
+        "key": "abatacept",
+        "name": "阿巴西普",
+        "genericName": "阿巴西普",
+        "brandNames": [
+          "恩瑞舒"
+        ],
+        "route": "sc",
+        "defaultDose": 125,
+        "unit": "mg"
+      },
+      {
+        "key": "rituximab",
+        "name": "利妥昔单抗",
+        "genericName": "利妥昔单抗",
+        "brandNames": [
+          "美罗华",
+          "汉利康"
+        ],
+        "route": "iv",
+        "defaultDose": 1000,
+        "unit": "mg"
+      },
+      {
+        "key": "infliximab",
+        "name": "英夫利西单抗",
+        "genericName": "英夫利西单抗",
+        "brandNames": [
+          "类克",
+          "类停",
+          "安佰特",
+          "佳佑健"
+        ],
+        "route": "iv",
+        "defaultDose": 5,
+        "unit": "mg/kg"
+      }
+    ],
+    "ad": [
+      {
+        "key": "dupilumab",
+        "name": "度普利尤单抗",
+        "genericName": "度普利尤单抗",
+        "brandNames": [
+          "达必妥"
+        ],
+        "route": "sc",
+        "defaultDose": 300,
+        "unit": "mg"
+      },
+      {
+        "key": "stapokibart",
+        "name": "司普奇拜单抗",
+        "genericName": "司普奇拜单抗",
+        "brandNames": [
+          "康悦达"
+        ],
+        "route": "sc",
+        "defaultDose": 300,
+        "unit": "mg"
+      }
+    ],
+    "csu": [
+      {
+        "key": "omalizumab",
+        "name": "奥马珠单抗",
+        "genericName": "奥马珠单抗",
+        "brandNames": [
+          "茁乐"
+        ],
+        "route": "sc",
+        "defaultDose": 300,
+        "unit": "mg"
+      },
+      {
+        "key": "dupilumab",
+        "name": "度普利尤单抗",
+        "genericName": "度普利尤单抗",
+        "brandNames": [
+          "达必妥"
+        ],
+        "route": "sc",
+        "defaultDose": 300,
+        "unit": "mg"
+      }
+    ],
+    "sle": [
+      {
+        "key": "belimumab",
+        "name": "贝利尤单抗",
+        "genericName": "贝利尤单抗",
+        "brandNames": [
+          "倍力腾"
+        ],
+        "route": "sc",
+        "defaultDose": 200,
+        "unit": "mg"
+      },
+      {
+        "key": "telitacicept",
+        "name": "泰它西普",
+        "genericName": "泰它西普",
+        "brandNames": [
+          "泰爱"
+        ],
+        "route": "sc",
+        "defaultDose": 160,
+        "unit": "mg"
+      }
+    ],
+    "hs": [
+      {
+        "key": "adalimumab",
+        "name": "阿达木单抗",
+        "genericName": "阿达木单抗",
+        "brandNames": [
+          "修美乐",
+          "格乐立",
+          "安健宁",
+          "苏立信",
+          "汉达远",
+          "君迈康",
+          "安佳润",
+          "泰博维"
+        ],
+        "route": "sc",
+        "defaultDose": 40,
+        "unit": "mg"
+      },
+      {
+        "key": "secukinumab",
+        "name": "司库奇尤单抗",
+        "genericName": "司库奇尤单抗",
+        "brandNames": [
+          "可善挺"
+        ],
+        "route": "sc",
+        "defaultDose": 300,
+        "unit": "mg"
+      }
+    ],
+    "asthma_eos": [
+      {
+        "key": "omalizumab",
+        "name": "奥马珠单抗",
+        "genericName": "奥马珠单抗",
+        "brandNames": [
+          "茁乐"
+        ],
+        "route": "sc",
+        "defaultDose": 300,
+        "unit": "mg"
+      },
+      {
+        "key": "mepolizumab",
+        "name": "美泊利单抗",
+        "genericName": "美泊利单抗",
+        "brandNames": [
+          "新可来"
+        ],
+        "route": "sc",
+        "defaultDose": 100,
+        "unit": "mg"
+      },
+      {
+        "key": "benralizumab",
+        "name": "本瑞利珠单抗",
+        "genericName": "本瑞利珠单抗",
+        "brandNames": [
+          "Fasenra"
+        ],
+        "route": "sc",
+        "defaultDose": 30,
+        "unit": "mg"
+      },
+      {
+        "key": "dupilumab",
+        "name": "度普利尤单抗",
+        "genericName": "度普利尤单抗",
+        "brandNames": [
+          "达必妥"
+        ],
+        "route": "sc",
+        "defaultDose": 300,
+        "unit": "mg"
+      }
+    ],
+    "uveitis": [
+      {
+        "key": "adalimumab",
+        "name": "阿达木单抗",
+        "genericName": "阿达木单抗",
+        "brandNames": [
+          "修美乐",
+          "格乐立",
+          "安健宁",
+          "苏立信",
+          "汉达远",
+          "君迈康",
+          "安佳润",
+          "泰博维"
+        ],
+        "route": "sc",
+        "defaultDose": 40,
+        "unit": "mg"
+      },
+      {
+        "key": "infliximab",
+        "name": "英夫利西单抗",
+        "genericName": "英夫利西单抗",
+        "brandNames": [
+          "类克",
+          "类停",
+          "安佰特",
+          "佳佑健"
+        ],
+        "route": "iv",
+        "defaultDose": 5,
+        "unit": "mg/kg"
+      }
+    ]
+  },
+  "allDrugs": [
+    {
+      "key": "adalimumab",
+      "name": "阿达木单抗",
+      "genericName": "阿达木单抗",
+      "brandNames": [
+        "修美乐",
+        "格乐立",
+        "安健宁",
+        "苏立信",
+        "汉达远",
+        "君迈康",
+        "安佳润",
+        "泰博维"
+      ],
+      "route": "sc",
+      "defaultDose": 40,
+      "unit": "mg"
+    },
+    {
+      "key": "infliximab",
+      "name": "英夫利西单抗",
+      "genericName": "英夫利西单抗",
+      "brandNames": [
+        "类克",
+        "类停",
+        "安佰特",
+        "佳佑健"
+      ],
+      "route": "iv",
+      "defaultDose": 5,
+      "unit": "mg/kg"
+    },
+    {
+      "key": "etanercept",
+      "name": "依那西普",
+      "genericName": "依那西普",
+      "brandNames": [
+        "恩利"
+      ],
+      "route": "sc",
+      "defaultDose": 50,
+      "unit": "mg"
+    },
+    {
+      "key": "tnfr_fc",
+      "name": "重组人Ⅱ型 TNF 受体-抗体融合蛋白",
+      "genericName": "重组人Ⅱ型肿瘤坏死因子受体-抗体融合蛋白",
+      "brandNames": [
+        "益赛普",
+        "强克",
+        "安佰诺"
+      ],
+      "route": "sc",
+      "defaultDose": 25,
+      "unit": "mg"
+    },
+    {
+      "key": "golimumab",
+      "name": "戈利木单抗",
+      "genericName": "戈利木单抗",
+      "brandNames": [
+        "欣普尼"
+      ],
+      "route": "sc",
+      "defaultDose": 50,
+      "unit": "mg"
+    },
+    {
+      "key": "certolizumab",
+      "name": "赛妥珠单抗",
+      "genericName": "聚乙二醇化赛妥珠单抗",
+      "brandNames": [
+        "希敏佳"
+      ],
+      "route": "sc",
+      "defaultDose": 200,
+      "unit": "mg"
+    },
+    {
+      "key": "ustekinumab",
+      "name": "乌司奴单抗",
+      "genericName": "乌司奴单抗",
+      "brandNames": [
+        "喜达诺"
+      ],
+      "route": "sc",
+      "defaultDose": 90,
+      "unit": "mg"
+    },
+    {
+      "key": "risankizumab",
+      "name": "瑞莎珠单抗",
+      "genericName": "瑞莎珠单抗",
+      "brandNames": [
+        "Skyrizi"
+      ],
+      "route": "sc",
+      "defaultDose": 150,
+      "unit": "mg"
+    },
+    {
+      "key": "guselkumab",
+      "name": "古塞奇尤单抗",
+      "genericName": "古塞奇尤单抗",
+      "brandNames": [
+        "特诺雅"
+      ],
+      "route": "sc",
+      "defaultDose": 100,
+      "unit": "mg"
+    },
+    {
+      "key": "secukinumab",
+      "name": "司库奇尤单抗",
+      "genericName": "司库奇尤单抗",
+      "brandNames": [
+        "可善挺"
+      ],
+      "route": "sc",
+      "defaultDose": 300,
+      "unit": "mg"
+    },
+    {
+      "key": "ixekizumab",
+      "name": "依奇珠单抗",
+      "genericName": "依奇珠单抗",
+      "brandNames": [
+        "拓咨"
+      ],
+      "route": "sc",
+      "defaultDose": 80,
+      "unit": "mg"
+    },
+    {
+      "key": "vedolizumab",
+      "name": "维得利珠单抗",
+      "genericName": "维得利珠单抗",
+      "brandNames": [
+        "安吉优"
+      ],
+      "route": "iv",
+      "defaultDose": 300,
+      "unit": "mg"
+    },
+    {
+      "key": "dupilumab",
+      "name": "度普利尤单抗",
+      "genericName": "度普利尤单抗",
+      "brandNames": [
+        "达必妥"
+      ],
+      "route": "sc",
+      "defaultDose": 300,
+      "unit": "mg"
+    },
+    {
+      "key": "stapokibart",
+      "name": "司普奇拜单抗",
+      "genericName": "司普奇拜单抗",
+      "brandNames": [
+        "康悦达"
+      ],
+      "route": "sc",
+      "defaultDose": 300,
+      "unit": "mg"
+    },
+    {
+      "key": "omalizumab",
+      "name": "奥马珠单抗",
+      "genericName": "奥马珠单抗",
+      "brandNames": [
+        "茁乐"
+      ],
+      "route": "sc",
+      "defaultDose": 300,
+      "unit": "mg"
+    },
+    {
+      "key": "mepolizumab",
+      "name": "美泊利单抗",
+      "genericName": "美泊利单抗",
+      "brandNames": [
+        "新可来"
+      ],
+      "route": "sc",
+      "defaultDose": 100,
+      "unit": "mg"
+    },
+    {
+      "key": "benralizumab",
+      "name": "本瑞利珠单抗",
+      "genericName": "本瑞利珠单抗",
+      "brandNames": [
+        "Fasenra"
+      ],
+      "route": "sc",
+      "defaultDose": 30,
+      "unit": "mg"
+    },
+    {
+      "key": "tocilizumab",
+      "name": "托珠单抗",
+      "genericName": "托珠单抗",
+      "brandNames": [
+        "雅美罗",
+        "安佰欣"
+      ],
+      "route": "iv",
+      "defaultDose": 8,
+      "unit": "mg/kg"
+    },
+    {
+      "key": "abatacept",
+      "name": "阿巴西普",
+      "genericName": "阿巴西普",
+      "brandNames": [
+        "恩瑞舒"
+      ],
+      "route": "sc",
+      "defaultDose": 125,
+      "unit": "mg"
+    },
+    {
+      "key": "rituximab",
+      "name": "利妥昔单抗",
+      "genericName": "利妥昔单抗",
+      "brandNames": [
+        "美罗华",
+        "汉利康"
+      ],
+      "route": "iv",
+      "defaultDose": 1000,
+      "unit": "mg"
+    },
+    {
+      "key": "belimumab",
+      "name": "贝利尤单抗",
+      "genericName": "贝利尤单抗",
+      "brandNames": [
+        "倍力腾"
+      ],
+      "route": "sc",
+      "defaultDose": 200,
+      "unit": "mg"
+    },
+    {
+      "key": "telitacicept",
+      "name": "泰它西普",
+      "genericName": "泰它西普",
+      "brandNames": [
+        "泰爱"
+      ],
+      "route": "sc",
+      "defaultDose": 160,
+      "unit": "mg"
+    }
+  ],
+  "sites": [
+    {
+      "value": "abdomen_ul",
+      "label": "腹部左上"
+    },
+    {
+      "value": "abdomen_ur",
+      "label": "腹部右上"
+    },
+    {
+      "value": "abdomen_ll",
+      "label": "腹部左下"
+    },
+    {
+      "value": "abdomen_lr",
+      "label": "腹部右下"
+    },
+    {
+      "value": "thigh_l",
+      "label": "左大腿"
+    },
+    {
+      "value": "thigh_r",
+      "label": "右大腿"
+    },
+    {
+      "value": "arm_l",
+      "label": "左上臂"
+    },
+    {
+      "value": "arm_r",
+      "label": "右上臂"
+    }
+  ],
+  "defaultSymptomTags": [
+    "注射部位红肿",
+    "注射部位硬结",
+    "发热",
+    "乏力",
+    "皮疹",
+    "关节痛",
+    "头痛",
+    "恶心",
+    "腹泻",
+    "瘙痒"
+  ]
+}

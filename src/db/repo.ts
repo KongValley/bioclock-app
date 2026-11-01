@@ -956,6 +956,40 @@ export const symptomTags = {
     const result = await db.runAsync('DELETE FROM symptom_tag WHERE id = ?', id)
     if (result.changes === 0) fail('症状标签不存在')
   },
+
+  /** 导入时按名字补齐标签：已存在就复用，不报错。 */
+  async ensure(name: string): Promise<{ tag: SymptomTag; created: boolean }> {
+    const safeName = requireNonEmptyString(name, '症状名称')
+    if (safeName.length > 20) fail('症状名称最多 20 个字')
+
+    const db = await getDatabase()
+    const existing = await db.getFirstAsync<SymptomTagRow>(
+      'SELECT * FROM symptom_tag WHERE name = ? COLLATE NOCASE LIMIT 1',
+      safeName,
+    )
+    if (existing) return { tag: mapSymptomTag(existing), created: false }
+
+    const maxRow = await db.getFirstAsync<{ max_order: number | null }>(
+      'SELECT MAX(sort_order) AS max_order FROM symptom_tag',
+    )
+    const row: SymptomTagRow = {
+      id: Crypto.randomUUID(),
+      name: safeName,
+      is_builtin: 0,
+      sort_order: (maxRow?.max_order ?? -1) + 1,
+      created_at: Date.now(),
+    }
+    await db.runAsync(
+      `INSERT INTO symptom_tag (id, name, is_builtin, sort_order, created_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      row.id,
+      row.name,
+      row.is_builtin,
+      row.sort_order,
+      row.created_at,
+    )
+    return { tag: mapSymptomTag(row), created: true }
+  },
 }
 
 // ---------------------------------------------------------------------------

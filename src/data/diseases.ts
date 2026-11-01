@@ -111,6 +111,44 @@ export function findDisease(id: string | null | undefined): Disease | undefined 
   return DISEASES.find((item) => item.id === id)
 }
 
+/**
+ * 读取用户选择的病种 id。
+ * 新数据写 `disease_ids`（JSON 数组），老数据只有单个 `disease_id`，这里统一兼容。
+ * 一个人可以同时有克罗恩病和强直性脊柱炎，所以病种是多选的。
+ */
+export function resolveDiseaseIds(settings: Record<string, string | undefined>): string[] {
+  const raw = settings.disease_ids
+  if (raw) {
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      if (Array.isArray(parsed)) {
+        const ids: string[] = []
+        for (const item of parsed) {
+          if (typeof item === 'string' && item !== '' && !ids.includes(item) && findDisease(item)) {
+            ids.push(item)
+          }
+        }
+        if (ids.length > 0) return ids
+      }
+    } catch {
+      // 坏数据回退到旧的单病种字段
+    }
+  }
+  const single = settings.disease_id
+  return single && findDisease(single) ? [single] : []
+}
+
+export function findDiseases(ids: string[]): Disease[] {
+  return ids
+    .map((id) => findDisease(id))
+    .filter((item): item is Disease => item !== undefined)
+}
+
+export function diseasesLabel(ids: string[]): string {
+  const names = findDiseases(ids).map((item) => item.name)
+  return names.length > 0 ? names.join('、') : '未选择病种'
+}
+
 export function diseasesByGroup(group: Disease['group']): Disease[] {
   return DISEASES.filter((item) => item.group === group)
 }
