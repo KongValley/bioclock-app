@@ -29,8 +29,19 @@ import {
 } from '@/store/app'
 import { resetDatabase } from '@/db'
 import { cancelAll, ensurePermissions } from '@/notify/scheduler'
-import { exportCsv, exportExcel, exportJson, exportPdf, shareFile } from '@/export'
+import {
+  exportCsv,
+  exportExcel,
+  exportJson,
+  exportPdf,
+  exportTransferFile,
+  isTransferFile,
+  shareFile,
+  summarizeTransfer,
+  transferToImportPayload,
+} from '@/export'
 import { previewImport, type ImportResult } from '@/import'
+import { ensureTreatmentFromTransfer } from '@/import/transfer'
 import { parseImportJson, type ImportPayload } from '@/import/schema'
 import { parseSpreadsheet } from '@/import/spreadsheet'
 import { DISEASE_GROUPS, diseasesByGroup, resolveDiseaseIds } from '@/data/diseases'
@@ -1656,8 +1667,27 @@ export default function SettingsScreen() {
   const [exportingCsv, setExportingCsv] = useState(false)
   const [exportingExcel, setExportingExcel] = useState(false)
   const [exportingJson, setExportingJson] = useState(false)
+  const [exportingTransfer, setExportingTransfer] = useState(false)
   const [exportingPdf, setExportingPdf] = useState(false)
   const [pendingImport, setPendingImport] = useState<ImportPayload | null>(null)
+  const [transferPending, setTransferPending] = useState<{
+    text: string
+    payload: ImportPayload
+    summary: {
+      doses: number
+      symptoms: number
+      efficacyEvents: number
+      schemaVersion: number
+      settings: Record<string, string>
+      reminder: {
+        treatmentId: string
+        offsets: number[]
+        timeOfDay: string
+        snoozeMinutes: number
+        enabled: boolean
+      } | null
+    }
+  } | null>(null)
   const [importPreview, setImportPreview] = useState<ImportResult | null>(null)
   const [importing, setImporting] = useState(false)
   const [importBusy, setImportBusy] = useState(false)
@@ -1889,7 +1919,19 @@ export default function SettingsScreen() {
       const name = (asset.name ?? '').toLowerCase()
       let payload: ImportPayload
       if (name.endsWith('.json')) {
-        payload = parseImportJson(await readPickedText(asset.uri))
+        const text = await readPickedText(asset.uri)
+        if (isTransferFile(text)) {
+          const transferSummary = summarizeTransfer(text)
+          setPendingImport(null)
+          setImportPreview(null)
+          setTransferPending({
+            text,
+            payload: transferToImportPayload(text),
+            summary: transferSummary,
+          })
+          return
+        }
+        payload = parseImportJson(text)
       } else if (name.endsWith('.xlsx') || name.endsWith('.xls')) {
         payload = parseSpreadsheet(await readPickedBuffer(asset.uri))
       } else {
@@ -1912,13 +1954,38 @@ export default function SettingsScreen() {
     }
   }
 
-  const runImport = async () => {
-    if (!pendingImport) return
+  const runImport = async (payload: ImportPayload | null = pendingImport) => {
+    if (!payload) return
+    const transfer = transferPending
     setImporting(true)
     try {
-      const { result, notifyWarning } = await importRecords(pendingImport)
+      if (transfer) {
+        await ensureTreatmentFromTransfer(transfer.text)
+      }
+      const { result, notifyWarning } = await importRecords(payload)
       setPendingImport(null)
+      setTransferPending(null)
       setImportPreview(null)
+
+      if (transfer) {
+        const safeSettings = { ...transfer.summary.settings }
+        delete safeSettings.app_lock
+        if (!safeSettings.onboarded_at) safeSettings.onboarded_at = String(Date.now())
+        const settingsResult = await updateSettings(safeSettings)
+        const active = useAppStore.getState().treatment
+        const reminder = transfer.summary.reminder
+        if (active && reminder) {
+          await updateReminder({
+            treatmentId: active.id,
+            offsets: reminder.offsets,
+            timeOfDay: reminder.timeOfDay,
+            snoozeMinutes: reminder.snoozeMinutes,
+            enabled: reminder.enabled,
+          })
+        }
+        if (settingsResult.notifyWarning) toast(settingsResult.notifyWarning, 'error')
+      }
+
       const parts: string[] = []
       if (result.injections > 0) parts.push(`${result.injections} 条注射`)
       if (result.oralLogs > 0) parts.push(`${result.oralLogs} 条口服`)
@@ -1974,6 +2041,22 @@ export default function SettingsScreen() {
       toast(errorMessage(error), 'error')
     } finally {
       setExportingJson(false)
+    }
+  }
+
+  const doExportTransfer = async () => {
+    setExportingTransfer(true)
+    try {
+      const file = await exportTransferFile()
+      await shareFile(file.path)
+      toast(
+        `已导出：${file.counts.treatments} 个方案、${file.counts.doses} 条打卡、${file.counts.symptoms} 条症状。请把文件保存到新手机可访问的位置。`,
+        'success',
+      )
+    } catch (error) {
+      toast(errorMessage(error), 'error')
+    } finally {
+      setExportingTransfer(false)
     }
   }
 
@@ -2409,11 +2492,23 @@ export default function SettingsScreen() {
         <SectionTitle title={zh.settings.exportSection} hint={zh.disclaimer.exportWarning} />
         <RowGroup>
           <SettingRow
+            label="换机导出（完整备份）"
+            hint="包含方案、用药线、提醒、打卡、症状和疗效记录，仅用于迁移到新手机"
+            value={exportingTransfer ? '导出中…' : undefined}
+            onPress={
+              exportingTransfer
+                ? undefined
+                : () => {
+                    void doExportTransfer()
+                  }
+            }
+          />
+          <SettingRow
             label="导入数据"
             hint={
               importBusy
                 ? '正在读取文件…'
-                : '从 Excel（.xlsx）或 JSON 文件批量补录，重复记录会自动跳过'
+                : '从 Excel（.xlsx）或 JSON 文件批量补录，也支持换机导出的备份'
             }
             onPress={
               importBusy
@@ -2449,7 +2544,7 @@ export default function SettingsScreen() {
           />
           <SettingRow
             label="导出 JSON（可编辑）"
-            hint="可再次导入还原，适合备份或迁移"
+            hint="打卡与症状的可编辑备份；完整换机请用上面的「换机导出」"
             value={exportingJson ? '导出中…' : undefined}
             onPress={
               exportingJson
@@ -2843,6 +2938,26 @@ export default function SettingsScreen() {
         }}
         onConfirm={() => {
           void runImport()
+        }}
+      />
+
+      <ConfirmDialog
+        visible={transferPending !== null}
+        title="从换机文件恢复"
+        message={
+          transferPending
+            ? `将恢复 ${transferPending.summary.doses} 条打卡、${transferPending.summary.symptoms} 条症状、${transferPending.summary.efficacyEvents} 条疗效记录。` +
+              '文件来自 BioClock 的换机导出，重复记录会自动跳过。' +
+              '如果新手机已有记录，建议先确认不会重复；不会删除任何已有数据。'
+            : ''
+        }
+        confirmLabel="开始恢复"
+        busy={importing}
+        onCancel={() => {
+          if (!importing) setTransferPending(null)
+        }}
+        onConfirm={() => {
+          if (transferPending) void runImport(transferPending.payload)
         }}
       />
 

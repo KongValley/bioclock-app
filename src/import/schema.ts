@@ -96,6 +96,8 @@ export interface ImportPayload {
   symptoms: ImportSymptom[]
   lineStates: ImportLineState[]
   efficacyEvents: ImportEfficacyEvent[]
+  /** 换机恢复：允许把历史记录挂到已停用的用药线上，避免重复建线 */
+  preserveEndedLines?: boolean
 }
 
 export const IMPORT_FORMAT = 'bioclock-import'

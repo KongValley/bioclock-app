@@ -148,6 +148,8 @@ repo 写入 → useAppStore.reload() → rescheduleAll() → 返回 notifyWarnin
   - 症状里的新标签自动补进 `symptom_tag`。
 - **不要改格式字段名**。网页工具、示例文件、解析器、文档四处必须同步改，并补 `src/import/__tests__` 测试。
 - 导出：CSV 只导出注射记录；Excel 导出 5 张表（含 `用药线`）；JSON 导出可直接再导入的 v3；PDF 报告用内联 HTML + expo-print。
+- 换机迁移：`src/export/transferFile.ts` 生成 `bioclock-transfer` 完整快照（方案、阶段生效时间、提醒、打卡、症状、疗效事件），
+  设置页「换机导出（完整备份）」一键导出；导入时 `src/import/transfer.ts` 会先按快照建出激活方案，再复用 v3 导入流程。
 
 ## 8. 网页工具 `tools/import-editor`
 

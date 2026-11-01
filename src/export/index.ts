@@ -4,6 +4,13 @@ export { exportCsv } from './csv'
 export { exportPdf } from './pdf'
 export { exportJson } from './json'
 export { exportExcel } from './excel'
+export { exportTransferFile } from './transferFile'
+export {
+  isTransferFile,
+  parseTransferFile,
+  summarizeTransfer,
+  transferToImportPayload,
+} from './transferSchema'
 
 /** 调起系统分享面板。设备不支持时抛中文错误，由 UI 层提示。 */
 export async function shareFile(path: string): Promise<void> {

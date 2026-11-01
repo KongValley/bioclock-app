@@ -223,8 +223,12 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
   }
 
   // ---- 用药线 ----
-  // 已停用的线不再接收新记录；导入到停用后的记录会自动新建一条线，避免出现“库里有、界面没有”。
-  const existingLines = active ? active.lines.filter((line) => line.endedAt === null) : []
+  // 普通补录不往已停用的线里写新记录；换机恢复需要保留已停用线的历史，所以按 payload 标记放行。
+  const existingLines = active
+    ? active.lines.filter(
+        (line) => payload.preserveEndedLines === true || line.endedAt === null,
+      )
+    : []
   const existingInjectionLines = existingLines.filter((line) => line.kind === 'injection')
   const existingOralLines = existingLines.filter((line) => line.kind === 'oral')
 
