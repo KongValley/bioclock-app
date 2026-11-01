@@ -256,12 +256,14 @@ function takeNearestLog(
   used: Set<string>,
   plannedAt: number,
   toleranceDays: number,
+  minAt?: number,
 ): DoseLog | null {
   const tolerance = toleranceDays * DAY
   let best: SortedLog | null = null
   let bestDistance = Number.POSITIVE_INFINITY
   for (const item of sortedLogs) {
     if (used.has(item.log.id)) continue
+    if (minAt !== undefined && item.sortAt < minAt) continue
     const distance =
       item.log.scheduledAt === plannedAt ? 0 : Math.abs(item.sortAt - plannedAt)
     if (distance > tolerance) continue
@@ -362,11 +364,25 @@ export function buildInjectionPlans(input: {
       plannedAt = base + phase.intervalDays * DAY
     }
 
-    // 停用后不再生成任何未来计划；停用前的历史计划与打卡保留。
-    if (endedAt !== null && plannedAt > endedAt) break
-
+    // 停用后不再生成普通未来计划；但停用日之后如果确实补录了打卡，仍要把它显示出来。
     const toleranceDays = Math.max(2, windowDays + 1, Math.ceil(phase.intervalDays / 2))
-    const log = takeNearestLog(sortedLogs, usedLogIds, plannedAt, toleranceDays)
+    const afterEnd = endedAt !== null && plannedAt > endedAt
+    if (afterEnd) {
+      const nextPostEnd = sortedLogs.find(
+        (item) => !usedLogIds.has(item.log.id) && item.sortAt > endedAt,
+      )
+      if (!nextPostEnd) break
+      // 计划已经停在停用日，补录记录直接按实际时间展示，不再硬套后面的计划日。
+      plannedAt = nextPostEnd.sortAt
+    }
+    const log = takeNearestLog(
+      sortedLogs,
+      usedLogIds,
+      plannedAt,
+      toleranceDays,
+      afterEnd ? endedAt : undefined,
+    )
+    if (afterEnd && !log) break
 
     // 未来针只保留前 INJECTION_FUTURE_DOSE_COUNT 个，之后不再推进（无限维持阶段也不会死循环）。
     // 有记录的未来针（例如补录了提前的注射）仍然保留。
@@ -572,11 +588,51 @@ export function buildOralPlans(input: {
     unit: '',
   }))
 
-  const assigned = pairLogs(plans, sortLogs(logs), sameLocalDay)
+  const sortedLogs = sortLogs(logs)
+  const assigned = pairLogs(plans, sortedLogs, sameLocalDay)
+  const assignedIds = new Set(
+    assigned.filter((log): log is DoseLog => log !== null).map((log) => log.id),
+  )
   plans.forEach((plan, index) => {
     const log = assigned[index]
     if (log) applyLog(plan, log, now, null)
   })
+
+  // 停用或疗程结束后补录的打卡，仍以计划点的形式显示出来，避免“库里有、界面没有”。
+  const boundary =
+    endedAt ??
+    (durationDays !== null && durationDays !== undefined
+      ? startDay + durationDays * DAY - 1
+      : null)
+  if (boundary !== null) {
+    const seenDays = new Set(plans.map((plan) => startOfLocalDay(plan.plannedAt)))
+    for (const item of sortedLogs) {
+      if (assignedIds.has(item.log.id)) continue
+      if (item.sortAt <= boundary) continue
+      const day = startOfLocalDay(item.sortAt)
+      if (seenDays.has(day)) continue
+      seenDays.add(day)
+      const plan: SchedulePlan = {
+        index: plans.length,
+        lineId: line.id,
+        treatmentId: line.treatmentId,
+        medicationId: line.medicationId,
+        kind: line.kind,
+        phaseId: null,
+        phaseKind: null,
+        plannedAt: day,
+        status: classifyStatus(day, now),
+        dose: null,
+        unit: '',
+      }
+      applyLog(plan, item.log, now, null)
+      plans.push(plan)
+    }
+    plans.sort((a, b) => a.plannedAt - b.plannedAt)
+    plans.forEach((plan, index) => {
+      plan.index = index
+    })
+  }
 
   return plans
 }
@@ -595,17 +651,16 @@ export function buildLineSchedule(input: LineScheduleInput): SchedulePlan[] {
 
   if (isSyncedLine(line)) {
     const host = input.resolveHost ? input.resolveHost(line) : null
-    const hostPlans = host ? buildInjectionPlans({ line: host, logs: input.hostLogs ?? [], now }) : []
-    if (hostPlans.length > 0) {
-      return buildSyncedPlans({
-        line,
-        hostPlans,
-        logs,
-        now,
-        endAt: earliestEnd(line.endedAt, host?.endedAt),
-      })
-    }
-    // 没有宿主线可跟随时，退回独立推进，避免整条线消失。
+    if (!host) return []
+    const hostPlans = buildInjectionPlans({ line: host, logs: input.hostLogs ?? [], now })
+    if (hostPlans.length === 0) return []
+    return buildSyncedPlans({
+      line,
+      hostPlans,
+      logs,
+      now,
+      endAt: earliestEnd(line.endedAt, host.endedAt),
+    })
   }
 
   return buildInjectionPlans({ line, logs, now })
@@ -644,19 +699,19 @@ export function buildSchedule(input: ScheduleInput): SchedulePlan[] {
 
     if (isSyncedLine(line)) {
       const host = resolveHostLine(line, lines)
-      const hostPlans = host ? hostPlansById.get(host.id) ?? [] : []
-      if (hostPlans.length > 0) {
-        for (const plan of buildSyncedPlans({
-          line,
-          hostPlans,
-          logs: lineLogs,
-          now,
-          endAt: earliestEnd(line.endedAt, host?.endedAt),
-        })) {
-          all.push(plan)
-        }
-        continue
+      if (!host) continue
+      const hostPlans = hostPlansById.get(host.id) ?? []
+      if (hostPlans.length === 0) continue
+      for (const plan of buildSyncedPlans({
+        line,
+        hostPlans,
+        logs: lineLogs,
+        now,
+        endAt: earliestEnd(line.endedAt, host.endedAt),
+      })) {
+        all.push(plan)
       }
+      continue
     }
 
     const cached = hostPlansById.get(line.id)
@@ -668,7 +723,13 @@ export function buildSchedule(input: ScheduleInput): SchedulePlan[] {
   return all.sort((a, b) => a.plannedAt - b.plannedAt)
 }
 
-/** 从一条线的计划里挑「下一步」：优先今天到期，其次最近的未来，最后才是最近一次逾期。 */
+/** 超过这个天数仍未补的漏针不再占用首页「今天要做」，避免几年后还提示“逾期 203 天”。 */
+const OVERDUE_ACTIONABLE_DAYS = 30
+
+/**
+ * 从一条线的计划里挑「下一步」：
+ * 今天到期 → 最近 30 天内最近一次逾期 → 最近的未来 → 更早的逾期（仅用于展示）。
+ */
 export function selectNextPlan(plans: SchedulePlan[], now: number): SchedulePlan | null {
   const actionable = plans.filter(
     (plan) => plan.status !== 'done' && plan.status !== 'missed',
@@ -685,16 +746,21 @@ export function selectNextPlan(plans: SchedulePlan[], now: number): SchedulePlan
   )
   if (dueToday) return dueToday
 
+  const overdue = actionable
+    .filter((plan) => plan.plannedAt < todayStart)
+    .sort((a, b) => b.plannedAt - a.plannedAt)
+  const recentOverdue = overdue.find(
+    (plan) => now - plan.plannedAt <= OVERDUE_ACTIONABLE_DAYS * DAY,
+  )
+  if (recentOverdue) return recentOverdue
+
   const upcoming = actionable
     .filter((plan) => plan.plannedAt >= todayEnd)
     .sort((a, b) => a.plannedAt - b.plannedAt)[0]
   if (upcoming) return upcoming
 
-  return (
-    actionable
-      .filter((plan) => plan.plannedAt < todayStart)
-      .sort((a, b) => b.plannedAt - a.plannedAt)[0] ?? null
-  )
+  // 既没有近期逾期也没有未来计划：方案可能已结束，不再把很久以前的漏针当“今天要做”。
+  return null
 }
 
 /** 所有线里最该关注的下一步 */

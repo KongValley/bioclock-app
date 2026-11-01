@@ -17,7 +17,8 @@ export { NOTIFY_PREP_HINT }
 
 const REMINDER_CHANNEL_ID = 'bioclock-reminders'
 const SCHEDULE_WINDOW_DAYS = 56
-const MAX_SCHEDULED_NOTIFICATIONS = 200
+// iOS 单 App 待发本地通知约 64 条；留一点余量，优先保证注射提醒。
+const MAX_SCHEDULED_NOTIFICATIONS = 60
 const EVENING_CATCH_UP_MINUTES = 20 * 60
 const DEFAULT_REMINDER_MINUTES = 9 * 60
 const DEFAULT_DND_START = '22:00'
@@ -58,7 +59,15 @@ export async function ensurePermissions(): Promise<{ granted: boolean; exactAlar
     granted = isNotificationGranted(permission)
   }
 
-  const exactAlarm = await detectExactAlarm()
+  let exactAlarm = await detectExactAlarm()
+  if (!exactAlarm) {
+    try {
+      const requested = await Notifications.requestExactAlarmPermissionsAsync()
+      exactAlarm = requested.granted
+    } catch {
+      // 部分系统/旧版本没有这个能力，保持 false，由调用方提示用户去系统设置。
+    }
+  }
   return { granted, exactAlarm }
 }
 
@@ -70,7 +79,20 @@ export async function ensurePermissions(): Promise<{ granted: boolean; exactAlar
  *
  * 返回实际写入系统的通知条数（不会超过 60 条）。
  */
-export async function rescheduleAll(): Promise<{ scheduled: number }> {
+let rescheduleQueue: Promise<unknown> = Promise.resolve()
+let rescheduleGeneration = 0
+
+export function rescheduleAll(): Promise<{ scheduled: number }> {
+  const generation = ++rescheduleGeneration
+  const run = rescheduleQueue
+    .catch(() => undefined)
+    .then(() => runReschedule(generation))
+  rescheduleQueue = run.catch(() => undefined)
+  return run
+}
+
+async function runReschedule(generation: number): Promise<{ scheduled: number }> {
+  if (generation !== rescheduleGeneration) return { scheduled: 0 }
   await cancelAll()
 
   const treatment = await treatments.getActive()
@@ -90,41 +112,56 @@ export async function rescheduleAll(): Promise<{ scheduled: number }> {
   const lineById = new Map(treatment.lines.map((line) => [line.id, line]))
   const dnd = resolveDndWindow(appSettings)
 
-  const drafts: ReminderDraft[] = []
+  const injectionDrafts =
+    reminder && reminder.enabled && reminder.offsets.length > 0
+      ? buildInjectionDrafts({
+          plans,
+          lines: lineById,
+          reminder,
+          medicationById,
+          treatmentName: treatment.name,
+          now,
+          horizon,
+          dnd,
+        })
+      : []
 
-  if (reminder && reminder.enabled && reminder.offsets.length > 0) {
-    drafts.push(
-      ...buildInjectionDrafts({
-        plans,
-        lines: lineById,
-        reminder,
-        medicationById,
-        treatmentName: treatment.name,
-        now,
-        horizon,
-        dnd,
-      }),
-    )
-  }
+  // 提醒总开关关闭时，口服也不再推送。
+  const oralDrafts =
+    reminder?.enabled === false
+      ? []
+      : buildOralDrafts({
+          plans,
+          lines: lineById,
+          medicationById,
+          now,
+          horizon,
+          dnd,
+        })
 
-  drafts.push(
-    ...buildOralDrafts({
-      plans,
-      lines: lineById,
-      medicationById,
-      now,
-      horizon,
-      dnd,
-    }),
+  injectionDrafts.sort((a, b) => a.triggerAt - b.triggerAt)
+  oralDrafts.sort((a, b) => a.triggerAt - b.triggerAt)
+
+  // 先保证注射提醒，再用剩余额度排口服；超出 iOS 64 条时不会把注射挤掉。
+  const limitedInjections = injectionDrafts.slice(0, MAX_SCHEDULED_NOTIFICATIONS)
+  const remaining = Math.max(0, MAX_SCHEDULED_NOTIFICATIONS - limitedInjections.length)
+  const limited = [...limitedInjections, ...oralDrafts.slice(0, remaining)].sort(
+    (a, b) => a.triggerAt - b.triggerAt || a.plannedAt - b.plannedAt,
   )
 
-  drafts.sort((a, b) => a.triggerAt - b.triggerAt || a.plannedAt - b.plannedAt)
-  const limited = drafts.slice(0, MAX_SCHEDULED_NOTIFICATIONS)
-
+  let failed = 0
   for (const draft of limited) {
-    await scheduleDraft(draft)
+    if (generation !== rescheduleGeneration) return { scheduled: 0 }
+    try {
+      await scheduleDraft(draft)
+    } catch {
+      failed += 1
+    }
   }
 
+  if (failed > 0) {
+    throw new Error(`有 ${failed} 条提醒未能排程，请检查系统通知权限`)
+  }
   return { scheduled: limited.length }
 }
 
@@ -171,6 +208,7 @@ function buildInjectionDrafts(input: {
   for (const plan of plans) {
     if (plan.kind !== 'injection') continue
     if (plan.status === 'done') continue
+    if (plan.plannedAt > horizon) continue
 
     const line = lines.get(plan.lineId)
     const medication = line ? medicationById.get(line.medicationId) ?? null : null
@@ -182,6 +220,7 @@ function buildInjectionDrafts(input: {
     for (const offset of offsets) {
       const day = addLocalDays(plan.plannedAt, offset)
       const rawTriggerAt = atLocalMinutes(day, reminderMinutes)
+      if (rawTriggerAt > horizon) continue
       const triggerAt = shiftOutOfDnd(rawTriggerAt, dnd)
       if (triggerAt <= now || !claimDraftKey(seen, plan.lineId, plan.plannedAt, triggerAt)) continue
 
@@ -205,6 +244,7 @@ function buildInjectionDrafts(input: {
     // 注射日当天 20:00 的「仍未登记」补提醒。
     if (offsets.includes(0)) {
       const rawTriggerAt = atLocalMinutes(plan.plannedAt, EVENING_CATCH_UP_MINUTES)
+      if (rawTriggerAt > horizon) continue
       const triggerAt = shiftOutOfDnd(rawTriggerAt, dnd)
       if (triggerAt > now && claimDraftKey(seen, plan.lineId, plan.plannedAt, triggerAt)) {
         const content = buildReminderContent({

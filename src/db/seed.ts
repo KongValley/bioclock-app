@@ -22,8 +22,8 @@ export async function seedBuiltinMedications(db: SQLiteDatabase): Promise<void> 
 
     const existing = await db.getFirstAsync<{ id: string }>(
       `SELECT id FROM medication
-        WHERE catalog_key = ?
-           OR (is_builtin = 1 AND catalog_key IS NULL AND generic_name = ?)
+        WHERE is_builtin = 1
+          AND (catalog_key = ? OR (catalog_key IS NULL AND generic_name = ?))
         LIMIT 1`,
       drug.key,
       drug.genericName,
@@ -83,8 +83,9 @@ export async function seedBuiltinSymptomTags(db: SQLiteDatabase): Promise<void> 
   const now = Date.now()
   let order = 0
   for (const name of DEFAULT_SYMPTOM_TAGS) {
+    // 旧库可能已有同名标签但没有标记位：OR IGNORE 保证不会因 UNIQUE(name) 卡死启动。
     await db.runAsync(
-      `INSERT INTO symptom_tag (id, name, is_builtin, sort_order, created_at)
+      `INSERT OR IGNORE INTO symptom_tag (id, name, is_builtin, sort_order, created_at)
        VALUES (?, ?, 1, ?, ?)`,
       Crypto.randomUUID(),
       name,
@@ -95,6 +96,6 @@ export async function seedBuiltinSymptomTags(db: SQLiteDatabase): Promise<void> 
   }
 
   await db.runAsync(
-    "INSERT INTO app_setting (key, value) VALUES ('symptom_tags_seeded', '1')",
+    "INSERT OR REPLACE INTO app_setting (key, value) VALUES ('symptom_tags_seeded', '1')",
   )
 }

@@ -1,6 +1,7 @@
 import { getDatabase } from '@/db'
 import {
   doseLogs as doseLogRepo,
+  efficacyEvents as efficacyEventRepo,
   medications as medicationRepo,
   symptoms as symptomRepo,
   symptomTags as symptomTagRepo,
@@ -39,6 +40,8 @@ export interface ImportResult {
   medicationsCreated: number
   /** 自动新建的用药线数 */
   linesCreated: number
+  /** 恢复的疗效事件数 */
+  efficacyEvents: number
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -71,8 +74,16 @@ interface PendingLine {
   input: TreatmentLineInput
 }
 
+function minuteKey(timestamp: number): number {
+  return Math.floor(timestamp / 60_000)
+}
+
+function logTimeOf(log: DoseLog): number {
+  return log.takenAt ?? log.scheduledAt ?? log.createdAt
+}
+
 function symptomKey(row: Pick<SymptomLog, 'loggedAt' | 'severity' | 'tags'>): string {
-  return `${row.loggedAt}|${row.severity}|${[...row.tags].sort().join('|')}`
+  return `${minuteKey(row.loggedAt)}|${row.severity}|${[...row.tags].sort().join('|')}`
 }
 
 function pickColor(index: number): string {
@@ -212,7 +223,8 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
   }
 
   // ---- 用药线 ----
-  const existingLines = active ? active.lines : []
+  // 已停用的线不再接收新记录；导入到停用后的记录会自动新建一条线，避免出现“库里有、界面没有”。
+  const existingLines = active ? active.lines.filter((line) => line.endedAt === null) : []
   const existingInjectionLines = existingLines.filter((line) => line.kind === 'injection')
   const existingOralLines = existingLines.filter((line) => line.kind === 'oral')
 
@@ -344,10 +356,11 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
   }
 
   // ---- 记录去重 ----
-  const existingLogKeys = new Set(allLogs.map((log) => `${log.takenAt}|${log.lineId}`))
+  // 导出文件只保留到分钟，这里统一按分钟比较，避免同一份备份再次导入时翻倍。
+  const existingLogKeys = new Set(allLogs.map((log) => `${minuteKey(logTimeOf(log))}|${log.lineId}`))
   const existingLogIdByTime = new Map<number, string>()
   for (const log of allLogs) {
-    if (log.takenAt !== null) existingLogIdByTime.set(log.takenAt, log.id)
+    if (log.takenAt !== null) existingLogIdByTime.set(minuteKey(log.takenAt), log.id)
   }
 
   const pendingLogs: PendingDoseLog[] = []
@@ -362,7 +375,7 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
       skippedNoLine += 1
       continue
     }
-    const key = `${row.injectedAt}|${
+    const key = `${minuteKey(row.injectedAt)}|${
       resolved.lineKey.startsWith('existing:') ? resolved.lineKey.slice('existing:'.length) : resolved.lineKey
     }`
     if (existingLogKeys.has(key)) {
@@ -395,7 +408,7 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
       skippedNoLine += 1
       continue
     }
-    const key = `${row.takenAt}|${
+    const key = `${minuteKey(row.takenAt)}|${
       resolved.lineKey.startsWith('existing:') ? resolved.lineKey.slice('existing:'.length) : resolved.lineKey
     }`
     if (existingLogKeys.has(key)) {
@@ -438,6 +451,7 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
   // ---- 症状标签 ----
   const tagSet = new Set(allTags.map((tag) => tag.name.toLowerCase()))
   let tags = 0
+  let efficacyApplied = 0
   for (const row of payload.symptoms) {
     for (const tag of row.tags) {
       const normalized = tag.toLowerCase()
@@ -490,15 +504,15 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
         const lineId = lineIdByKey.get(pending.lineKey)
         if (!lineId) throw new Error('导入时找不到对应的用药线')
         const created: DoseLog = await doseLogRepo.create({ ...pending.input, lineId })
-        logIdByTime.set(pending.time, created.id)
+        logIdByTime.set(minuteKey(pending.time), created.id)
       }
 
       for (const row of pendingSymptoms) {
         const injectionId =
           row.injectionAt === null
             ? null
-            : logIdByTime.get(row.injectionAt) ??
-              existingLogIdByTime.get(row.injectionAt) ??
+            : logIdByTime.get(minuteKey(row.injectionAt)) ??
+              existingLogIdByTime.get(minuteKey(row.injectionAt)) ??
               null
         await symptomRepo.create({
           loggedAt: row.loggedAt,
@@ -517,6 +531,62 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
         await symptomTagRepo.ensure(tag)
       }
     }
+
+    if (payload.lineStates.length > 0 || payload.efficacyEvents.length > 0) {
+      const updatedActive = await treatmentRepo.getActive()
+      if (updatedActive) {
+        const meds = await medicationRepo.list()
+        const medNameById = new Map(meds.map((med) => [med.id, med.name]))
+        const findLine = (lineLabel: string | null, medName: string | null, kind: 'injection' | 'oral') => {
+          const candidates = updatedActive.lines.filter((line) => line.kind === kind)
+          return (
+            candidates.find((line) => lineLabel !== null && line.label === lineLabel) ??
+            candidates.find(
+              (line) =>
+                medName !== null && medNameById.get(line.medicationId) === medName,
+            ) ??
+            null
+          )
+        }
+
+        const db = await getDatabase()
+        for (const state of payload.lineStates) {
+          const line = findLine(state.lineLabel, state.medicationName, state.kind)
+          if (!line) continue
+          if ((line.endedAt ?? null) !== state.endedAt) {
+            await db.runAsync(
+              'UPDATE treatment_line SET ended_at = ? WHERE id = ?',
+              state.endedAt,
+              line.id,
+            )
+          }
+        }
+
+        if (payload.efficacyEvents.length > 0) {
+          const existing = await efficacyEventRepo.list()
+          const seen = new Set(
+            existing.map((event) => `${event.lineId}|${event.kind}|${minuteKey(event.occurredAt)}`),
+          )
+          for (const event of payload.efficacyEvents) {
+            const line =
+              findLine(event.lineLabel, event.medicationName, 'injection') ??
+              findLine(event.lineLabel, event.medicationName, 'oral')
+            if (!line) continue
+            const key = `${line.id}|${event.kind}|${minuteKey(event.occurredAt)}`
+            if (seen.has(key)) continue
+            await efficacyEventRepo.create({
+              lineId: line.id,
+              kind: event.kind,
+              occurredAt: event.occurredAt,
+              note: event.note,
+              stopLine: false,
+            })
+            seen.add(key)
+            efficacyApplied += 1
+          }
+        }
+      }
+    }
   }
 
   return {
@@ -528,6 +598,7 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
     tags,
     medicationsCreated: medicationCreates.length,
     linesCreated: pendingLines.length,
+    efficacyEvents: dryRun ? payload.efficacyEvents.length : efficacyApplied,
   }
 }
 

@@ -29,7 +29,7 @@ import {
   type TreatmentLineDraft,
 } from '@/store/app'
 import { resetDatabase } from '@/db'
-import { cancelAll } from '@/notify/scheduler'
+import { cancelAll, ensurePermissions } from '@/notify/scheduler'
 import { exportCsv, exportExcel, exportJson, exportPdf, shareFile } from '@/export'
 import { previewImport, type ImportResult } from '@/import'
 import { parseImportJson, type ImportPayload } from '@/import/schema'
@@ -1778,6 +1778,15 @@ export default function SettingsScreen() {
   const toggleReminder = async (enabled: boolean) => {
     if (!reminder) return
     try {
+      let permissionWarning: string | null = null
+      if (enabled) {
+        const permission = await ensurePermissions()
+        if (!permission.granted) {
+          permissionWarning = '系统通知权限未开启，提醒不会显示'
+        } else if (!permission.exactAlarm) {
+          permissionWarning = '精确闹钟未开启，提醒可能会延迟'
+        }
+      }
       const result = await updateReminder({
         treatmentId: reminder.treatmentId,
         offsets: reminderOffsets.length > 0 ? reminderOffsets : reminder.offsets,
@@ -1786,6 +1795,7 @@ export default function SettingsScreen() {
         enabled,
       })
       toast(enabled ? '提醒已开启' : '提醒已关闭', 'success')
+      if (permissionWarning) toast(permissionWarning, 'error')
       if (result.notifyWarning) toast(result.notifyWarning, 'error')
     } catch (error) {
       toast(errorMessage(error), 'error')
@@ -1887,6 +1897,7 @@ export default function SettingsScreen() {
       if (result.skippedNoLine > 0) parts.push(`${result.skippedNoLine} 条找不到对应用药线`)
       if (result.medicationsCreated > 0) parts.push(`新建 ${result.medicationsCreated} 种药物`)
       if (result.linesCreated > 0) parts.push(`新建 ${result.linesCreated} 条用药线`)
+      if (result.efficacyEvents > 0) parts.push(`恢复 ${result.efficacyEvents} 条疗效记录`)
       if (result.tags > 0) parts.push(`新增 ${result.tags} 个症状标签`)
       toast(parts.length === 0 ? '没有可导入的新记录' : `已导入：${parts.join('，')}`, 'success')
       if (notifyWarning) toast(notifyWarning, 'error')
@@ -2632,8 +2643,8 @@ export default function SettingsScreen() {
             ? importPreview
               ? `将导入 ${importPreview.injections} 条注射、${importPreview.oralLogs} 条口服、${importPreview.symptoms} 条症状记录。` +
                 `将新建 ${importPreview.medicationsCreated} 种药物、${importPreview.linesCreated} 条用药线；${importPreview.skippedNoLine} 条找不到对应用药线会被跳过。` +
-                `重复的记录会自动跳过，导入后可以逐条删除。`
-              : `将导入 ${pendingImport.injections.length} 条注射、${pendingImport.oralLogs.length} 条口服、${pendingImport.symptoms.length} 条症状记录。重复的记录会自动跳过，导入后可以逐条删除。`
+                `重复的记录会自动跳过（按分钟比对），导入后可以逐条删除。${importPreview.efficacyEvents > 0 ? `另有 ${importPreview.efficacyEvents} 条疗效记录会尝试还原。` : ''}`
+              : `将导入 ${pendingImport.injections.length} 条注射、${pendingImport.oralLogs.length} 条口服、${pendingImport.symptoms.length} 条症状记录。重复的记录会自动跳过（按分钟比对），导入后可以逐条删除。`
             : ''
         }
         confirmLabel="导入"

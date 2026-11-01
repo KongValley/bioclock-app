@@ -133,8 +133,8 @@ repo 写入 → useAppStore.reload() → rescheduleAll() → 返回 notifyWarnin
 
 ## 7. 导入 / 导出
 
-- 导入：支持 `.xlsx` / `.xls` / `.json`。当前格式 **v2**（v1 仍兼容），见 `docs/import-format.md`。
-- JSON v2 顶层：`{ format, version: 2, medications, injections, oralLogs, symptoms }`。
+- 导入：支持 `.xlsx` / `.xls` / `.json`。当前格式 **v3**（v1/v2 仍兼容），见 `docs/import-format.md`。
+- JSON v3 顶层：`{ format, version: 3, medications, injections, oralLogs, symptoms, lineStates, efficacyEvents }`；v1/v2 没有后两段。
 - Excel 五张工作表：`注射记录`、`症状记录`、`药物`、`口服打卡`、`填写说明`（App 导出的 `.xlsx` 另有只读的 `用药线`）。
 - 解析器 `src/import/schema.ts`、`src/import/spreadsheet.ts` 必须是纯函数（不碰 React Native），便于 vitest 直接测。
 - Excel 用 `xlsx`（SheetJS）解析，别再引入第二个表格库；日期既支持文本也支持 Excel 序列号。
@@ -145,7 +145,7 @@ repo 写入 → useAppStore.reload() → rescheduleAll() → 返回 notifyWarnin
   - `previewImport` 用同一套逻辑只算数量，确认框显示将新建几条用药线；
   - 症状里的新标签自动补进 `symptom_tag`。
 - **不要改格式字段名**。网页工具、示例文件、解析器、文档四处必须同步改，并补 `src/import/__tests__` 测试。
-- 导出：CSV 只导出注射记录；Excel 导出 5 张表（含 `用药线`）；JSON 导出可直接再导入的 v2；PDF 报告用内联 HTML + expo-print。
+- 导出：CSV 只导出注射记录；Excel 导出 5 张表（含 `用药线`）；JSON 导出可直接再导入的 v3；PDF 报告用内联 HTML + expo-print。
 
 ## 8. 网页工具 `tools/import-editor`
 
@@ -214,5 +214,5 @@ npx expo export --platform android --output-dir .expo-verify   # 验证 Metro/He
 
 - `docs/design.md`：产品定位、信息架构、排程策略
 - `docs/contract.md`：模块接口与数据模型契约（含 v3、v5 变更；v5 已取代 v3 的 regimen 部分）
-- `docs/import-format.md`：导入文件格式（v2，兼容 v1）与导入行为
+- `docs/import-format.md`：导入文件格式（v3，兼容 v1/v2）与导入行为
 - `tools/import-editor/README.md`：网页工具的结构与修改提示

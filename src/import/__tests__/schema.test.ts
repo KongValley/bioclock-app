@@ -150,7 +150,7 @@ describe('导入文件解析（v2）', () => {
   it('拒绝错误格式或版本', () => {
     expect(() => parseImportJson('{}')).toThrow(/format/)
     expect(() =>
-      parseImportJson(JSON.stringify({ format: 'bioclock-import', version: 3, symptoms: [] })),
+      parseImportJson(JSON.stringify({ format: 'bioclock-import', version: 99, symptoms: [] })),
     ).toThrow(/版本/)
     expect(() => parseImportJson('not json')).toThrow(/JSON/)
     expect(() => parseImportJson('')).toThrow(/空的/)
@@ -177,5 +177,33 @@ describe('导入文件解析（v2）', () => {
       medications: [{ name: '某药', route: '鼻喷' }],
     }
     expect(() => parseImportJson(JSON.stringify(badRoute))).toThrow(/给药途径/)
+  })
+
+  it('解析 v3 的用药线状态与疗效记录', () => {
+    const payload = parseImportJson(
+      JSON.stringify({
+        format: 'bioclock-import',
+        version: 3,
+        lineStates: [
+          { lineLabel: '阿达木单抗', medication: '阿达木单抗', kind: 'injection', endedAt: '2026-03-02 08:00' },
+        ],
+        efficacyEvents: [
+          {
+            lineLabel: '阿达木单抗',
+            medication: '阿达木单抗',
+            kind: 'failed',
+            occurredAt: '2026-03-02 09:00',
+            note: '医生评估后换药',
+          },
+        ],
+      }),
+    )
+
+    expect(payload.lineStates[0].kind).toBe('injection')
+    expect(payload.lineStates[0].endedAt).toBe(parseLocalDateTime('2026-03-02 08:00', '时间'))
+    expect(payload.efficacyEvents[0].kind).toBe('failed')
+    expect(payload.efficacyEvents[0].occurredAt).toBe(
+      parseLocalDateTime('2026-03-02 09:00', '时间'),
+    )
   })
 })

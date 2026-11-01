@@ -1,40 +1,45 @@
 import { File, Paths } from 'expo-file-system'
-import { doseLogs, medications, symptoms, treatments } from '@/db/repo'
+import { doseLogs, efficacyEvents as efficacyEventRepo, medications, symptoms, treatments } from '@/db/repo'
 import type { DoseLog, TreatmentLine } from '@/types'
 import { SITE_LABELS } from '@/domain/rotation'
 
 /**
- * 导出可再次导入的 v2 JSON（format: bioclock-import）。
+ * 导出可再次导入的 v3 JSON（format: bioclock-import）。
  *
  * 结构：
  * {
  *   "format": "bioclock-import",
- *   "version": 2,
+ *   "version": 3,
  *   "exportedAt": "YYYY-MM-DD HH:mm",
  *   "medications": [...],
  *   "injections": [...],
  *   "symptoms": [...],
- *   "oralLogs": [...]
+ *   "oralLogs": [...],
+ *   "lineStates": [...],
+ *   "efficacyEvents": [...]
  * }
  *
  * 时间一律写成本地时间字符串，不带时区；导出后可以直接用「导入数据」还原。
  */
 
 const IMPORT_FORMAT = 'bioclock-import'
-const IMPORT_VERSION = 2
+const IMPORT_VERSION = 3
 
 export async function exportJson(): Promise<{ path: string; filename: string }> {
-  const [allTreatments, allMedications, allSymptoms, allLogs] = await Promise.all([
-    treatments.list(),
-    medications.list(),
-    symptoms.list(),
-    doseLogs.list(),
-  ])
+  const [allTreatments, allMedications, allSymptoms, allLogs, allEfficacyEvents] =
+    await Promise.all([
+      treatments.list(),
+      medications.list(),
+      symptoms.list(),
+      doseLogs.list(),
+      efficacyEventRepo.list(),
+    ])
 
   const medicationById = new Map(allMedications.map((medication) => [medication.id, medication]))
-  const active = allTreatments.find((treatment) => treatment.isActive) ?? null
   const lineById = new Map<string, TreatmentLine>()
-  for (const line of active?.lines ?? []) lineById.set(line.id, line)
+  for (const treatment of allTreatments) {
+    for (const line of treatment.lines) lineById.set(line.id, line)
+  }
   const scopedLogs = allLogs.filter((log) => lineById.has(log.lineId))
   const logById = new Map(scopedLogs.map((log) => [log.id, log]))
 
@@ -100,6 +105,30 @@ export async function exportJson(): Promise<{ path: string; filename: string }> 
       }
     })
 
+  const lineStates = [...lineById.values()].map((line) => {
+    const medication = medicationById.get(line.medicationId)
+    return {
+      lineLabel: line.label,
+      medication: medication?.name ?? line.label,
+      kind: line.kind,
+      endedAt: line.endedAt === null ? null : formatLocalDateTime(line.endedAt),
+    }
+  })
+
+  const efficacyEventsPayload = allEfficacyEvents
+    .filter((event) => lineById.has(event.lineId))
+    .map((event) => {
+      const line = lineById.get(event.lineId)
+      const medication = line ? medicationById.get(line.medicationId) : undefined
+      return {
+        lineLabel: line?.label ?? null,
+        medication: medication?.name ?? line?.label ?? '',
+        kind: event.kind,
+        occurredAt: formatLocalDateTime(event.occurredAt),
+        note: event.note,
+      }
+    })
+
   const payload = {
     format: IMPORT_FORMAT,
     version: IMPORT_VERSION,
@@ -108,6 +137,8 @@ export async function exportJson(): Promise<{ path: string; filename: string }> 
     injections,
     symptoms: symptomsPayload,
     oralLogs,
+    lineStates,
+    efficacyEvents: efficacyEventsPayload,
   }
 
   const filename = `bioclock-${formatLocalDate(Date.now())}.json`

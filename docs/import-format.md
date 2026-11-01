@@ -1,43 +1,49 @@
-# BioClock 导入文件格式（v2）
+# BioClock 导入文件格式（v3）
 
 设置 → 导入数据 支持从 **Excel（.xlsx / .xls）或 JSON** 文件批量补录药物、注射、口服打卡和症状。
 可以用 [`tools/import-editor`](../tools/import-editor) 网页工具填写导出，也可以按本文档手写。
 
-v2 对应 v5 的「治疗组合」模型：一个治疗方案里可以同时有多条注射线（皮下 / 静脉）和口服线，
-注射与口服的打卡记录统一存进 `dose_log`。v1 文件仍然可以导入，见文末[版本兼容](#版本兼容)。
+v3 对应 v6 的「治疗组合 + 疗效事件」模型：一个治疗方案里可以同时有多条注射线（皮下 / 静脉）和口服线，
+注射与口服的打卡记录统一存进 `dose_log`。v1/v2 文件仍然可以导入，见文末[版本兼容](#版本兼容)。
 
 ## 版本
 
 | 版本 | 顶层新增 | 说明 |
 | --- | --- | --- |
 | v1 | `injections`、`symptoms` | 只有注射和症状，没有药物与口服段 |
-| v2 | `medications`、`oralLogs` | 当前版本；注射记录增加 `status`、`lineLabel` |
+| v2 | `medications`、`oralLogs` | 注射记录增加 `status`、`lineLabel` |
+| v3 | `lineStates`、`efficacyEvents` | 当前版本；导出会带上停用时间与疗效事件 |
 
 ## JSON 顶层结构
 
 ```json
 {
   "format": "bioclock-import",
-  "version": 2,
+  "version": 3,
   "medications": [],
   "injections": [],
   "oralLogs": [],
-  "symptoms": []
+  "symptoms": [],
+  "lineStates": [],
+  "efficacyEvents": []
 }
 ```
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `format` | 是 | 固定 `"bioclock-import"`，用来防止选错文件 |
-| `version` | 是 | 当前支持 `1` 和 `2` |
+| `version` | 是 | 当前支持 `1`、`2`、`3` |
 | `medications` | 否 | 药物数组，见下 |
 | `injections` | 否 | 注射打卡数组，见下 |
 | `oralLogs` | 否 | 口服打卡数组，见下 |
 | `symptoms` | 否 | 症状记录数组，见下 |
+| `lineStates` | 否 | v3：当前方案各用药线的停用时间 |
+| `efficacyEvents` | 否 | v3：疗效下降 / 失效 / 不耐受等事件 |
 | `exportedAt` | 否 | App 导出时写入的时间，仅作说明，导入时忽略 |
 
-四个数组可以只填一个，但不能都为空；**每个数组最多 2000 条**，超出请拆文件。
+数组可以只填一个，但不能都为空；**每个数组最多 2000 条**，超出请拆文件。
 只有 `medications` 时不需要先建治疗方案；只要包含注射或口服记录，就必须已有激活的治疗方案。
+`lineStates` / `efficacyEvents` 会按「用药线名称 → 药名」匹配当前激活方案，匹配不到的会跳过。
 
 ## 时间
 
@@ -192,9 +198,50 @@ YYYY-MM-DD HH:mm
 | `tags` | 否 | 症状名称数组，自动去重；单个最多 20 个字，新名称会补进症状标签表 |
 | `temperature` | 否 | 体温，30–45 |
 | `note` | 否 | 备注 |
-| `injectionAt` | 否 | 关联同一时刻的用药打卡记录（注射或口服均可）；时间需完全一致，找不到时按未关联处理 |
+| `injectionAt` | 否 | 关联同一时刻的用药打卡记录（注射或口服均可）；按分钟匹配，找不到时按未关联处理 |
 
 `severity` 和 `painScore` 是两个独立维度，导入时不会互相换算。
+
+## v3：用药线状态 `lineStates`
+
+```json
+{
+  "lineLabel": "阿达木单抗",
+  "medication": "阿达木单抗",
+  "kind": "injection",
+  "endedAt": "2026-10-01 09:00"
+}
+```
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `lineLabel` | 否 | 优先按线名匹配当前方案 |
+| `medication` | 否 | 线名匹配不到时按药名匹配 |
+| `kind` | 是 | `injection` 或 `oral` |
+| `endedAt` | 否 | 停用时间；`null` 表示恢复到使用中 |
+
+## v3：疗效事件 `efficacyEvents`
+
+```json
+{
+  "lineLabel": "阿达木单抗",
+  "medication": "阿达木单抗",
+  "kind": "failed",
+  "occurredAt": "2026-10-01 09:30",
+  "note": "医生评估后换药"
+}
+```
+
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `lineLabel` | 否 | 优先按线名匹配 |
+| `medication` | 否 | 线名匹配不到时按药名匹配 |
+| `kind` | 是 | `reduced / failed / intolerance / antibody / other`，也接受中文 |
+| `occurredAt` | 是 | 事件发生时间，不能晚于今天 |
+| `note` | 否 | 备注 |
+
+导入时会按事件时间重新统计「当时已完成次数」，不直接信任文件里的旧快照。
+事件关联到当前激活方案的用药线；匹配不到的行会跳过。
 
 ## Excel 格式（推荐）
 

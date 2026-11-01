@@ -57,7 +57,11 @@ async function openAndMigrate(): Promise<SQLite.SQLiteDatabase> {
   }
 
   await seedBuiltinMedications(db)
-  await seedBuiltinSymptomTags(db)
+  try {
+    await seedBuiltinSymptomTags(db)
+  } catch {
+    // 标签播种失败不应阻塞打开数据库；用户仍可手工添加标签。
+  }
   return db
 }
 

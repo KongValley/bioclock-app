@@ -391,6 +391,16 @@ function requireTimestamp(value: unknown, label: string): number {
   return num
 }
 
+/** 停用时间只允许今天或过去，避免误填未来日期导致提醒立刻消失。 */
+function normalizeEndedAt(value: unknown): number | null {
+  if (value === null || value === undefined) return null
+  const timestamp = requireTimestamp(value, '停用时间')
+  if (timestamp > Date.now() + 24 * 60 * 60 * 1000) {
+    fail('停用时间不能晚于今天')
+  }
+  return timestamp
+}
+
 function requireNullableDose(value: unknown, label: string): number | null {
   if (value === null || value === undefined) return null
   const num = requireFiniteNumber(value, label)
@@ -630,6 +640,13 @@ export const medications = {
     if (typeof input.isBuiltin !== 'boolean') fail('isBuiltin 必须是布尔值')
 
     const db = await getDatabase()
+    if (catalogKey !== null) {
+      const duplicate = await db.getFirstAsync<{ id: string }>(
+        'SELECT id FROM medication WHERE catalog_key = ? LIMIT 1',
+        catalogKey,
+      )
+      if (duplicate) fail('目录标识已存在，不能重复创建药物')
+    }
     const row: MedicationRow = {
       id: Crypto.randomUUID(),
       name,
@@ -769,6 +786,8 @@ export interface TreatmentLineInput {
   syncWithHost?: boolean
   anchor?: RegimenAnchor
   windowDays?: number
+  /** 停用时间；新增线通常为 null，导入备份时会带上 */
+  endedAt?: number | null
   /** 注射线必填，至少一个阶段 */
   phases?: Array<Omit<TreatmentPhase, 'id' | 'lineId'>>
   /** 口服线必填 */
@@ -867,7 +886,7 @@ function normalizeLine(treatmentId: string, input: TreatmentLineInput): Normaliz
     sync_with_host: syncWithHost ? 1 : 0,
     anchor,
     window_days: windowDays,
-    ended_at: null,
+    ended_at: normalizeEndedAt(input.endedAt),
     oral_start: null,
     oral_duration_days: null,
     oral_frequency: null,
@@ -943,6 +962,10 @@ export interface TreatmentPatch {
   name?: string
   /** 按 lineId 覆盖已有 line 的字段（phases 传给注射线时会整体替换） */
   lines?: Array<Partial<Omit<TreatmentLine, 'id' | 'treatmentId' | 'kind'>> & { id: string }>
+  /** 同一次事务里删除的用药线（级联删除打卡） */
+  removeLines?: string[]
+  /** 同一次事务里新增的用药线 */
+  addLines?: TreatmentLineInput[]
 }
 
 interface PreparedLineUpdate {
@@ -951,6 +974,7 @@ interface PreparedLineUpdate {
   values: Array<string | number | null>
   phases: TreatmentPhaseRow[] | null
   isHost: 0 | 1 | undefined
+  medicationId: string | undefined
 }
 
 export const treatments = {
@@ -1072,13 +1096,25 @@ export const treatments = {
     await db.runAsync('DELETE FROM treatment_line WHERE id = ?', lineId)
   },
 
-  /** 停用 / 恢复一条用药线。endedAt 为 null 表示恢复。 */
+  /** 停用 / 恢复一条用药线。endedAt 为 null 表示恢复；重复停用保留更早的时间。 */
   async setLineEnded(lineId: string, endedAt: number | null): Promise<TreatmentLine> {
     requireNonEmptyString(lineId, '用药线 ID')
     const db = await getDatabase()
-    const lineRow = await requireTreatmentLineExists(db, lineId)
-    const value = endedAt === null ? null : requireTimestamp(endedAt, '停用时间')
-    await db.runAsync('UPDATE treatment_line SET ended_at = ? WHERE id = ?', value, lineId)
+    await requireTreatmentLineExists(db, lineId)
+    const value = normalizeEndedAt(endedAt)
+    await db.runAsync(
+      `UPDATE treatment_line
+        SET ended_at = CASE
+          WHEN ? IS NULL THEN NULL
+          WHEN ended_at IS NULL OR ended_at > ? THEN ?
+          ELSE ended_at
+        END
+        WHERE id = ?`,
+      value,
+      value,
+      value,
+      lineId,
+    )
     const updated = await db.getFirstAsync<TreatmentLineRow>(
       'SELECT * FROM treatment_line WHERE id = ?',
       lineId,
@@ -1126,9 +1162,19 @@ export const treatments = {
       const values: Array<string | number | null> = []
       let isHost: 0 | 1 | undefined
 
+      let medicationId: string | undefined
       if (linePatch.medicationId !== undefined) {
-        const medicationId = requireNonEmptyString(linePatch.medicationId, '药物 ID')
+        medicationId = requireNonEmptyString(linePatch.medicationId, '药物 ID')
         await requireMedicationExists(db, medicationId)
+        if (medicationId !== lineRow.medication_id) {
+          const logs = await db.getFirstAsync<{ n: number }>(
+            'SELECT COUNT(*) AS n FROM dose_log WHERE line_id = ?',
+            lineId,
+          )
+          if ((logs?.n ?? 0) > 0) {
+            fail('已有打卡记录的用药线不能更换药物，请新建一条用药线')
+          }
+        }
         sets.push('medication_id = ?')
         values.push(medicationId)
       }
@@ -1145,9 +1191,10 @@ export const treatments = {
         values.push(requireInteger(linePatch.windowDays, '按时窗口', 0))
       }
       if (linePatch.endedAt !== undefined) {
-        if (linePatch.endedAt !== null) {
+        const endedAt = normalizeEndedAt(linePatch.endedAt)
+        if (endedAt !== null) {
           sets.push('ended_at = ?')
-          values.push(requireTimestamp(linePatch.endedAt, '停用时间'))
+          values.push(endedAt)
         } else {
           sets.push('ended_at = NULL')
         }
@@ -1194,16 +1241,85 @@ export const treatments = {
         )
       }
 
-      prepared.push({ id: lineId, sets, values, phases, isHost })
+      prepared.push({ id: lineId, sets, values, phases, isHost, medicationId })
     }
 
     // 维护「一个治疗方案只有一个主药」的不变式：允许一次保存里换主药。
     const newHosts = prepared.filter((entry) => entry.isHost === 1)
     if (newHosts.length > 1) fail('一个治疗方案只能有一个主药')
-    const clearHosts = newHosts.length > 0
+
+    const removeLineIds = Array.isArray(patch.removeLines) ? patch.removeLines : []
+    const addLineInputs = Array.isArray(patch.addLines) ? patch.addLines : []
+    const normalizedAdds: NormalizedLine[] = []
+    for (const input of addLineInputs) {
+      const medicationId = requireNonEmptyString(input?.medicationId, '药物 ID')
+      await requireMedicationExists(db, medicationId)
+      normalizedAdds.push(normalizeLine(id, input))
+    }
+
+    // 用「当前行 + 本次修改 - 删除 + 新增」做一次预检，确保同药线不重复、主药唯一。
+    const currentRows = await db.getAllAsync<{
+      id: string
+      medication_id: string
+      kind: LineKind
+      is_host: number
+    }>('SELECT id, medication_id, kind, is_host FROM treatment_line WHERE treatment_id = ?', id)
+    const finalLines = new Map(
+      currentRows.map((row) => [
+        row.id,
+        { medicationId: row.medication_id, kind: row.kind, isHost: row.is_host === 1 },
+      ]),
+    )
+    for (const entry of prepared) {
+      const current = finalLines.get(entry.id)
+      if (!current) continue
+      if (entry.medicationId !== undefined) current.medicationId = entry.medicationId
+      if (entry.isHost !== undefined) current.isHost = entry.isHost === 1
+    }
+
+    const removed = new Set<string>()
+    for (const removeId of removeLineIds) {
+      const lineId = requireNonEmptyString(removeId, '用药线 ID')
+      if (removed.has(lineId)) fail('同一条用药线不能重复删除')
+      if (seenLines.has(lineId)) fail('同一条用药线不能同时修改和删除')
+      const lineRow = await requireTreatmentLineExists(db, lineId)
+      if (lineRow.treatment_id !== id) fail('用药线不属于该治疗方案')
+      removed.add(lineId)
+      finalLines.delete(lineId)
+    }
+
+    for (const normalized of normalizedAdds) {
+      const key = `${normalized.row.kind}:${normalized.row.medication_id}`
+      const duplicate = [...finalLines.values()].some(
+        (line) => `${line.kind}:${line.medicationId}` === key,
+      )
+      if (duplicate) fail('同一个治疗方案里不能重复添加同一种药')
+      if (normalized.row.is_host === 1) {
+        const host = [...finalLines.values()].some((line) => line.isHost)
+        if (host) fail('一个治疗方案只能有一个主药')
+      }
+      finalLines.set(normalized.row.id, {
+        medicationId: normalized.row.medication_id,
+        kind: normalized.row.kind,
+        isHost: normalized.row.is_host === 1,
+      })
+    }
+
+    const finalHosts = [...finalLines.values()].filter((line) => line.isHost)
+    if (finalHosts.length > 1) fail('一个治疗方案只能有一个主药')
+
+    const clearHosts =
+      newHosts.length > 0 || normalizedAdds.some((line) => line.row.is_host === 1)
 
     const touched = prepared.filter((entry) => entry.sets.length > 0 || entry.phases !== null)
-    if (newName === null && touched.length === 0) return loadTreatment(db, existing)
+    if (
+      newName === null &&
+      touched.length === 0 &&
+      removed.size === 0 &&
+      normalizedAdds.length === 0
+    ) {
+      return loadTreatment(db, existing)
+    }
 
     await db.withTransactionAsync(async () => {
       if (newName !== null) {
@@ -1238,6 +1354,12 @@ export const treatments = {
             )
           }
         }
+      }
+      for (const removeId of removed) {
+        await db.runAsync('DELETE FROM treatment_line WHERE id = ?', removeId)
+      }
+      for (const normalized of normalizedAdds) {
+        await insertLine(db, normalized)
       }
     })
 
@@ -1305,6 +1427,9 @@ export const efficacyEvents = {
     const lineId = requireNonEmptyString(input?.lineId, '用药线 ID')
     const kind = requireEfficacyKind(input.kind)
     const occurredAt = requireTimestamp(input.occurredAt, '发生时间')
+    if (occurredAt > Date.now() + 24 * 60 * 60 * 1000) {
+      fail('发生时间不能晚于今天')
+    }
     const note = normalizeOptionalText(input.note)
     const stopLine = input.stopLine === true
 
@@ -1542,6 +1667,18 @@ export const doseLogs = {
 
     if (sets.length === 0) return mapDoseLog(existing)
 
+    const nextStatus =
+      patch.status !== undefined ? requireDoseStatus(patch.status) : existing.status
+    const nextTakenAt =
+      patch.takenAt !== undefined
+        ? patch.takenAt === null
+          ? null
+          : requireTimestamp(patch.takenAt, '打卡时间')
+        : existing.taken_at
+    if (nextStatus === 'done' && nextTakenAt === null) {
+      fail('已完成的记录需要填写打卡时间')
+    }
+
     sets.push('updated_at = ?')
     values.push(Date.now())
 
@@ -1744,8 +1881,13 @@ export const symptomTags = {
   async remove(id: string): Promise<void> {
     requireNonEmptyString(id, '症状标签 ID')
     const db = await getDatabase()
-    const result = await db.runAsync('DELETE FROM symptom_tag WHERE id = ?', id)
-    if (result.changes === 0) fail('症状标签不存在')
+    const row = await db.getFirstAsync<{ is_builtin: number }>(
+      'SELECT is_builtin FROM symptom_tag WHERE id = ? LIMIT 1',
+      id,
+    )
+    if (!row) fail('症状标签不存在')
+    if (row.is_builtin === 1) fail('内置症状标签不能删除')
+    await db.runAsync('DELETE FROM symptom_tag WHERE id = ?', id)
   },
 
   /** 导入时按名字补齐标签：已存在就复用，不报错。 */
@@ -1798,11 +1940,14 @@ export const reminderRules = {
     const db = await getDatabase()
     await requireTreatmentExists(db, treatmentId)
 
-    const existing =
-      (await getReminderRowFor(db, treatmentId)) ??
-      (input.id
-        ? await db.getFirstAsync<ReminderRuleRow>('SELECT * FROM reminder_rule WHERE id = ?', input.id)
-        : null)
+    const byId = input.id
+      ? await db.getFirstAsync<ReminderRuleRow>('SELECT * FROM reminder_rule WHERE id = ?', input.id)
+      : null
+    if (byId && byId.treatment_id !== treatmentId) {
+      fail('提醒规则不属于该治疗方案')
+    }
+
+    const existing = (await getReminderRowFor(db, treatmentId)) ?? byId
 
     if (existing) {
       await db.runAsync(

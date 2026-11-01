@@ -331,12 +331,11 @@ describe('同步线', () => {
     expect(resolveHostLine(synced, [synced])).toBeNull()
   })
 
-  it('没有宿主可跟随时退回独立推进', () => {
+  it('没有宿主可跟随时不再假装独立推进', () => {
     const synced = makeInjectionLine({ id: 'line-synced', isHost: false, syncWithHost: true })
     const plans = buildLineSchedule({ line: synced, logs: [], now: T0 })
 
-    expect(plans[0].plannedAt).toBe(T0)
-    expect(offsets(plans)).toEqual([0, 14, 28])
+    expect(plans).toEqual([])
   })
 })
 
@@ -547,6 +546,30 @@ describe('nextDose / nextDoseForLine', () => {
 
     expect(nextDoseForLine({ line, logs: [injectionLog(0)], now: T0 + 10 * DAY })).toBeNull()
   })
+
+  it('近期逾期针优先于未来计划，不会被“还有 N 天”顶掉', () => {
+    const plan = nextDoseForLine({
+      line: makeInjectionLine(),
+      logs: [injectionLog(0), injectionLog(14)],
+      now: T0 + 30 * DAY,
+    })
+
+    expect(plan?.plannedAt).toBe(T0 + 28 * DAY)
+    expect(plan?.status).toBe('overdue')
+  })
+
+  it('很久以前的漏针不再占用首页', () => {
+    const line = makeInjectionLine({
+      phases: [makePhase({ orderIdx: 0, intervalDays: 7, repeatCount: 2 })],
+    })
+    const plan = nextDoseForLine({
+      line,
+      logs: [injectionLog(0)],
+      now: T0 + 300 * DAY,
+    })
+
+    expect(plan).toBeNull()
+  })
 })
 
 describe('停用的用药线', () => {
@@ -566,6 +589,27 @@ describe('停用的用药线', () => {
     expect(plans.every((plan) => plan.status === 'done')).toBe(true)
   })
 
+  it('停用日之后补录的注射仍然出现在历史里', () => {
+    const line = makeInjectionLine({
+      id: 'line-host',
+      endedAt: T0 + 30 * DAY,
+      phases: [makePhase({ orderIdx: 0, intervalDays: 14 })],
+    })
+    const plans = buildInjectionPlans({
+      line,
+      logs: [
+        injectionLog(0),
+        injectionLog(14),
+        injectionLog(28),
+        injectionLog(34),
+      ],
+      now: T0 + 40 * DAY,
+    })
+
+    expect(offsets(plans)).toEqual([0, 14, 28, 34])
+    expect(plans[3].status).toBe('done')
+  })
+
   it('口服线停用后不再生成停用日之后的打卡点', () => {
     const line = makeOralLine({
       startDate: T0,
@@ -575,6 +619,26 @@ describe('停用的用药线', () => {
     const plans = buildOralPlans({ line, logs: [], now: T0 + 10 * DAY })
 
     expect(offsets(plans)).toEqual([0, 1, 2])
+  })
+
+  it('停用日之后补录的口服打卡仍然出现在历史里', () => {
+    const line = makeOralLine({
+      startDate: T0,
+      frequency: 'daily',
+      endedAt: T0 + 2 * DAY,
+    })
+    const plans = buildOralPlans({
+      line,
+      logs: [
+        makeLog({ lineId: 'line-oral', scheduledAt: T0, takenAt: T0 }),
+        makeLog({ lineId: 'line-oral', scheduledAt: T0 + DAY, takenAt: T0 + DAY }),
+        makeLog({ lineId: 'line-oral', scheduledAt: T0 + 2 * DAY, takenAt: T0 + 2 * DAY }),
+        makeLog({ lineId: 'line-oral', scheduledAt: T0 + 5 * DAY, takenAt: T0 + 5 * DAY }),
+      ],
+      now: T0 + 10 * DAY,
+    })
+
+    expect(offsets(plans)).toEqual([0, 1, 2, 5])
   })
 
   it('同步线跟随主药时，任一条线停用都会截断计划', () => {

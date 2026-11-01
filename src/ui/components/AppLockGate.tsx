@@ -8,8 +8,8 @@ import { Button } from './Button'
 
 /**
  * 应用锁。
- * 加锁判断放在 Tabs 布局里，因为根布局由其他代理维护。
- * 回到前台超过 30 秒会重新上锁。
+ * 包在根 Stack 外面，Tabs 和 modal 登记页都会一起被锁住。
+ * 回到前台超过 30 秒会重新上锁；关闭应用锁同样需要验证身份。
  */
 export function AppLockGate({ children }: { children: ReactNode }) {
   const theme = useTheme()
@@ -19,36 +19,30 @@ export function AppLockGate({ children }: { children: ReactNode }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const unlock = useCallback(async () => {
+  const authenticate = useCallback(async (): Promise<boolean> => {
     setBusy(true)
     setError(null)
     try {
-      const hasHardware = await LocalAuthentication.hasHardwareAsync()
-      if (!hasHardware) {
-        setError('此设备不支持生物识别，可在下方暂时关闭应用锁。')
-        return
-      }
-      const enrolled = await LocalAuthentication.isEnrolledAsync()
-      if (!enrolled) {
-        setError('尚未录入指纹或面容，请先在系统设置中录入，或暂时关闭应用锁。')
-        return
-      }
       const result = await LocalAuthentication.authenticateAsync({
         promptMessage: '解锁 BioClock',
         cancelLabel: '取消',
+        // 没有指纹/面容时允许使用设备密码，避免用户被永久挡在门外。
         disableDeviceFallback: false,
       })
-      if (result.success) {
-        setUnlocked(true)
-      } else {
-        setError('未通过验证，请重试。')
-      }
+      if (result.success) return true
+      setError('未通过验证，请重试。')
+      return false
     } catch {
       setError('身份验证失败，请重试。')
+      return false
     } finally {
       setBusy(false)
     }
   }, [])
+
+  const unlock = useCallback(async () => {
+    if (await authenticate()) setUnlocked(true)
+  }, [authenticate])
 
   const previousLock = useRef(lockEnabled)
 
@@ -93,15 +87,15 @@ export function AppLockGate({ children }: { children: ReactNode }) {
   if (!lockEnabled || unlocked) return <>{children}</>
 
   const closeLock = () => {
-    useAppStore
-      .getState()
-      .updateSettings({ app_lock: '0' })
-      .then((result) => {
+    void (async () => {
+      if (!(await authenticate())) return
+      try {
+        const result = await useAppStore.getState().updateSettings({ app_lock: '0' })
         if (result.notifyWarning) setError(result.notifyWarning)
-      })
-      .catch((error: unknown) => {
+      } catch (error) {
         setError(`关闭应用锁失败：${error instanceof Error ? error.message : '请稍后再试'}`)
-      })
+      }
+    })()
   }
 
   return (
@@ -137,7 +131,7 @@ export function AppLockGate({ children }: { children: ReactNode }) {
             maxWidth: 300,
           }}
         >
-          使用指纹或面容解锁，查看你的注射与症状记录。
+          使用指纹、面容或设备密码解锁，查看你的注射与症状记录。
         </Text>
         {error ? (
           <Text
@@ -163,7 +157,7 @@ export function AppLockGate({ children }: { children: ReactNode }) {
             icon="unlock"
           />
           {error ? (
-            <Button label="暂时关闭应用锁" onPress={closeLock} variant="secondary" />
+            <Button label="验证后关闭应用锁" onPress={closeLock} variant="secondary" />
           ) : null}
         </View>
       </View>

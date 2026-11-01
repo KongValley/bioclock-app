@@ -39,7 +39,8 @@ App 会按「时间 + 用药线」跳过重复记录，症状按「时间 + 严�
 ## 字段与格式
 
 导出文件格式（同时也是 App 的导入格式）见仓库 [`docs/import-format.md`](../../docs/import-format.md)。
-当前是 **v2**：`{ format, version: 2, medications, injections, oralLogs, symptoms }`，App 仍接受 v1 文件。
+当前是 **v3**：`{ format, version: 3, medications, injections, oralLogs, symptoms, lineStates, efficacyEvents }`，App 仍接受 v1/v2 文件。
+工具会原样保留导入文件里的 `lineStates` / `efficacyEvents`，即使页面不编辑它们。
 
 ## 修改这个工具
 
@@ -68,6 +69,6 @@ npm run import-editor
 
 用 MiniMax Code 改这个工具时，注意：
 
-- 导出的 JSON 必须保持 `format: "bioclock-import"`、`version: 2`（同时能读 v1），字段名和 `docs/import-format.md` 一致。
+- 导出的 JSON 必须保持 `format: "bioclock-import"`、`version: 3`（同时能读 v1/v2），字段名和 `docs/import-format.md` 一致。
 - 时间统一写本地时间字符串 `YYYY-MM-DD HH:mm`，不要写 ISO + Z。
 - 不要引入构建步骤或外部 CDN，保持双击可用。

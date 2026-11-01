@@ -1,4 +1,11 @@
-import type { DoseStatus, InjectionSite, MedicationRoute, SymptomLog } from '@/types'
+import type {
+  DoseStatus,
+  EfficacyKind,
+  InjectionSite,
+  LineKind,
+  MedicationRoute,
+  SymptomLog,
+} from '@/types'
 import { SITE_LABELS } from '@/domain/rotation'
 
 /**
@@ -65,15 +72,34 @@ export interface ImportSymptom {
   injectionAt: number | null
 }
 
+/** v3 备份里的用药线状态（停用时间），按药名/线名匹配当前方案。 */
+export interface ImportLineState {
+  lineLabel: string | null
+  medicationName: string | null
+  kind: LineKind
+  endedAt: number | null
+}
+
+/** v3 备份里的疗效事件。 */
+export interface ImportEfficacyEvent {
+  lineLabel: string | null
+  medicationName: string | null
+  kind: EfficacyKind
+  occurredAt: number
+  note: string | null
+}
+
 export interface ImportPayload {
   medications: ImportMedication[]
   injections: ImportInjection[]
   oralLogs: ImportOralLog[]
   symptoms: ImportSymptom[]
+  lineStates: ImportLineState[]
+  efficacyEvents: ImportEfficacyEvent[]
 }
 
 export const IMPORT_FORMAT = 'bioclock-import'
-export const IMPORT_VERSION = 2
+export const IMPORT_VERSION = 3
 /** 仍然接受的最老版本 */
 export const IMPORT_MIN_VERSION = 1
 export const IMPORT_MAX_ROWS = 2000
@@ -217,6 +243,34 @@ function parseStatus(value: unknown, label: string): DoseStatus {
   return status
 }
 
+function parseLineKind(value: unknown, label: string): LineKind {
+  if (value === 'injection' || value === '注射') return 'injection'
+  if (value === 'oral' || value === '口服') return 'oral'
+  fail(`${label}必须是注射或口服`)
+}
+
+const EFFICACY_KIND_ALIASES: Record<string, EfficacyKind> = {
+  reduced: 'reduced',
+  疗效下降: 'reduced',
+  下降: 'reduced',
+  failed: 'failed',
+  疗效失效: 'failed',
+  失效: 'failed',
+  intolerance: 'intolerance',
+  不耐受: 'intolerance',
+  antibody: 'antibody',
+  抗药抗体: 'antibody',
+  other: 'other',
+  其他: 'other',
+}
+
+function parseEfficacyKind(value: unknown, label: string): EfficacyKind {
+  if (typeof value !== 'string') fail(`${label}必须是文本`)
+  const kind = EFFICACY_KIND_ALIASES[value.trim().toLowerCase()] ?? EFFICACY_KIND_ALIASES[value.trim()]
+  if (!kind) fail(`${label}不认识「${value}」`)
+  return kind
+}
+
 function parseTags(value: unknown, label: string): string[] {
   if (value === undefined || value === null) return []
   if (!Array.isArray(value)) fail(`${label}必须是数组`)
@@ -347,20 +401,59 @@ function parseSymptom(value: unknown, index: number): ImportSymptom {
   }
 }
 
+function parseLineState(value: unknown, index: number): ImportLineState {
+  const label = `第 ${index + 1} 条用药线状态`
+  if (!isRecord(value)) fail(`${label}必须是对象`)
+  const endedAt =
+    value.endedAt === undefined || value.endedAt === null
+      ? null
+      : parseLocalDateTime(value.endedAt, `${label}的停用时间`)
+  if (endedAt !== null && endedAt > Date.now() + 24 * 60 * 60 * 1000) {
+    fail(`${label}的停用时间不能晚于今天`)
+  }
+  return {
+    lineLabel: optionalText(value.lineLabel, `${label}的用药线名称`, 60),
+    medicationName: optionalText(value.medication, `${label}的药名`),
+    kind: parseLineKind(value.kind, `${label}的类型`),
+    endedAt,
+  }
+}
+
+function parseEfficacyEvent(value: unknown, index: number): ImportEfficacyEvent {
+  const label = `第 ${index + 1} 条疗效记录`
+  if (!isRecord(value)) fail(`${label}必须是对象`)
+  return {
+    lineLabel: optionalText(value.lineLabel, `${label}的用药线名称`, 60),
+    medicationName: optionalText(value.medication, `${label}的药名`),
+    kind: parseEfficacyKind(value.kind, `${label}的类型`),
+    occurredAt: parseLocalDateTime(value.occurredAt, `${label}的发生时间`),
+    note: optionalText(value.note, `${label}的备注`),
+  }
+}
+
 export function parseImportRows(
   medicationRows: unknown[],
   injectionRows: unknown[],
   oralLogRows: unknown[],
   symptomRows: unknown[],
+  lineStateRows: unknown[] = [],
+  efficacyRows: unknown[] = [],
 ): ImportPayload {
   const total =
-    medicationRows.length + injectionRows.length + oralLogRows.length + symptomRows.length
+    medicationRows.length +
+    injectionRows.length +
+    oralLogRows.length +
+    symptomRows.length +
+    lineStateRows.length +
+    efficacyRows.length
   if (total === 0) fail('文件里没有任何记录')
   for (const [rows, name] of [
     [medicationRows, '药物'],
     [injectionRows, '注射记录'],
     [oralLogRows, '口服打卡'],
     [symptomRows, '症状记录'],
+    [lineStateRows, '用药线状态'],
+    [efficacyRows, '疗效记录'],
   ] as const) {
     if (rows.length > IMPORT_MAX_ROWS) {
       fail(`${name}最多 ${IMPORT_MAX_ROWS} 条，请拆分成多个文件`)
@@ -372,6 +465,8 @@ export function parseImportRows(
     injections: injectionRows.map((row, index) => parseInjection(row, index)),
     oralLogs: oralLogRows.map((row, index) => parseOralLog(row, index)),
     symptoms: symptomRows.map((row, index) => parseSymptom(row, index)),
+    lineStates: lineStateRows.map((row, index) => parseLineState(row, index)),
+    efficacyEvents: efficacyRows.map((row, index) => parseEfficacyEvent(row, index)),
   }
 }
 
@@ -393,10 +488,14 @@ export function parseImportJson(text: string): ImportPayload {
 
   const version = raw.version
   if (
-    version !== IMPORT_MIN_VERSION &&
-    version !== IMPORT_VERSION
+    typeof version !== 'number' ||
+    !Number.isInteger(version) ||
+    version < IMPORT_MIN_VERSION ||
+    version > IMPORT_VERSION
   ) {
-    fail(`不支持的导入文件版本：${String(version)}，当前支持版本 ${IMPORT_MIN_VERSION} 和 ${IMPORT_VERSION}`)
+    fail(
+      `不支持的导入文件版本：${String(version)}，当前支持版本 ${IMPORT_MIN_VERSION} 到 ${IMPORT_VERSION}`,
+    )
   }
 
   return parseImportRows(
@@ -404,5 +503,7 @@ export function parseImportJson(text: string): ImportPayload {
     readArray(raw.injections, 'injections'),
     readArray(raw.oralLogs, 'oralLogs'),
     readArray(raw.symptoms, 'symptoms'),
+    readArray(raw.lineStates, 'lineStates'),
+    readArray(raw.efficacyEvents, 'efficacyEvents'),
   )
 }

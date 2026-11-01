@@ -14,7 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useTheme } from '@/ui/theme'
 import { zh } from '@/i18n/zh'
 import { useAppStore, errorMessage } from '@/store/app'
-import { buildSchedule } from '@/domain/schedule'
+import { buildSchedule, selectNextPlan } from '@/domain/schedule'
 import { recommendSite } from '@/domain/rotation'
 import type { DoseLogInput } from '@/db/repo'
 import type { Injection, InjectionSite, Medication } from '@/types'
@@ -116,13 +116,10 @@ export default function InjectionModal() {
   const nextPlanFor = (targetLineId: string) => {
     if (!treatment) return null
     try {
-      const plans = buildSchedule({ lines: treatment.lines, logs: doseLogs, now: Date.now() })
-      return (
-        plans.find(
-          (plan) =>
-            plan.lineId === targetLineId && plan.status !== 'done' && plan.status !== 'missed',
-        ) ?? null
-      )
+      const now = Date.now()
+      const plans = buildSchedule({ lines: treatment.lines, logs: doseLogs, now })
+      const linePlans = plans.filter((plan) => plan.lineId === targetLineId)
+      return selectNextPlan(linePlans, now)
     } catch {
       return null
     }

@@ -253,27 +253,30 @@ export const useAppStore = create<AppStore>((set) => ({
       await treatmentRepo.create({ name: input.name, lines: input.lines })
     } else {
       const current = await treatmentRepo.get(input.id)
+      if (!current) throw new Error('治疗方案不存在')
       const linePatches = input.lines
         .filter(
           (line): line is TreatmentLineDraft & { id: string } =>
             typeof line.id === 'string' && line.id !== '',
         )
         .map(toLinePatch)
-      await treatmentRepo.update(input.id, { name: input.name, lines: linePatches })
-
       const keptIds = new Set(
         input.lines
           .map((line) => line.id)
           .filter((id): id is string => typeof id === 'string' && id !== ''),
       )
-      for (const line of current?.lines ?? []) {
-        if (!keptIds.has(line.id)) await treatmentRepo.removeLine(line.id)
-      }
-      for (const draft of input.lines) {
-        if (draft.id === undefined) {
-          await treatmentRepo.addLine(input.id, draft)
-        }
-      }
+      const removeLines = current.lines
+        .filter((line) => !keptIds.has(line.id))
+        .map((line) => line.id)
+      const addLines = input.lines.filter(
+        (line): line is TreatmentLineDraft => line.id === undefined,
+      )
+      await treatmentRepo.update(input.id, {
+        name: input.name,
+        lines: linePatches,
+        removeLines,
+        addLines,
+      })
     }
     return { notifyWarning: await afterWrite() }
   },

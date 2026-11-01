@@ -10,6 +10,7 @@ import { initDatabase } from '@/db'
 import { useAppStore } from '@/store/app'
 import { ThemeProvider, useTheme, type ThemeMode } from '@/ui/theme'
 import { ToastHost } from '@/ui/components/Toast'
+import { AppLockGate } from '@/ui/components/AppLockGate'
 import { zh } from '@/i18n/zh'
 
 export { useTheme } from '@/ui/theme'
@@ -52,7 +53,9 @@ function BootScreen({ error, onRetry }: { error: string | null; onRetry: () => v
 function RootNavigator() {
   const theme = useTheme()
   const lastResponse = Notifications.useLastNotificationResponse()
-  const handledId = useRef<string | null>(null)
+  const onboardedAt = useAppStore((state) => state.settings.onboarded_at)
+  const pendingResponse = useRef<Notifications.NotificationResponse | null>(null)
+  const lastHandled = useRef<{ id: string; at: number } | null>(null)
 
   // Android 根视图背景跟着主题走，避免切页/回弹时闪白。
   useEffect(() => {
@@ -61,14 +64,20 @@ function RootNavigator() {
     })
   }, [theme.colors.background])
 
-  // 点击通知 -> 直接打开对应的登记页（注射/口服）。
-  useEffect(() => {
-    if (!lastResponse) return
-    const identifier = lastResponse.notification.request.identifier
-    if (handledId.current === identifier) return
-    handledId.current = identifier
+  const handleResponse = useCallback((response: Notifications.NotificationResponse) => {
+    const identifier = response.notification.request.identifier
+    const now = Date.now()
+    // 冷启动时 hook 和 listener 可能同时拿到同一条响应，短时间内去重一次即可；
+    // 不能永久记住 identifier，否则用户第二次点同一条通知会没有反应。
+    if (lastHandled.current?.id === identifier && now - lastHandled.current.at < 5_000) {
+      return
+    }
+    if (!useAppStore.getState().settings.onboarded_at) {
+      pendingResponse.current = response
+      return
+    }
 
-    const data: unknown = lastResponse.notification.request.content.data
+    const data: unknown = response.notification.request.content.data
     if (typeof data !== 'object' || data === null) return
     const payload = data as {
       type?: unknown
@@ -77,8 +86,8 @@ function RootNavigator() {
       plannedAt?: unknown
     }
     if (payload.type !== 'dose') return
-    if (!useAppStore.getState().settings.onboarded_at) return
 
+    lastHandled.current = { id: identifier, at: now }
     const lineId = typeof payload.lineId === 'string' ? payload.lineId : undefined
     if (payload.kind === 'oral') {
       router.push({
@@ -96,20 +105,40 @@ function RootNavigator() {
       pathname: '/modal/injection',
       params: lineId ? { lineId } : {},
     })
-  }, [lastResponse])
+  }, [])
+
+  // 冷启动 / 后台恢复时都通过同一个处理函数，避免两套去重逻辑。
+  useEffect(() => {
+    if (lastResponse) handleResponse(lastResponse)
+  }, [lastResponse, handleResponse])
+
+  useEffect(() => {
+    const subscription = Notifications.addNotificationResponseReceivedListener(handleResponse)
+    return () => subscription.remove()
+  }, [handleResponse])
+
+  // 引导期间点通知时先暂存，完成引导后再补跳。
+  useEffect(() => {
+    if (!onboardedAt || !pendingResponse.current) return
+    const response = pendingResponse.current
+    pendingResponse.current = null
+    handleResponse(response)
+  }, [onboardedAt, handleResponse])
 
   return (
     <SafeAreaProvider>
       <StatusBar style={theme.isDark ? 'light' : 'dark'} />
       <ToastHost />
-      <Stack
-        screenOptions={{
-          headerShown: false,
-          contentStyle: { backgroundColor: theme.colors.background },
-        }}
-      >
-        <Stack.Screen name="(tabs)" />
-      </Stack>
+      <AppLockGate>
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            contentStyle: { backgroundColor: theme.colors.background },
+          }}
+        >
+          <Stack.Screen name="(tabs)" />
+        </Stack>
+      </AppLockGate>
     </SafeAreaProvider>
   )
 }

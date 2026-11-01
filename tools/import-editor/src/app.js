@@ -25,6 +25,8 @@
     injections: [],
     symptoms: [],
     oralLogs: [],
+    lineStates: [],
+    efficacyEvents: [],
     customDrugs: [],
     customTags: [],
     draftTags: [],
@@ -834,6 +836,8 @@
     const injections = state.injections.map((row) => {
       const item = { injectedAt: row.injectedAt }
       if (row.medication) item.medication = row.medication
+      if (row.status) item.status = row.status
+      if (row.lineLabel) item.lineLabel = row.lineLabel
       if (row.dose !== '' && row.dose !== null && row.dose !== undefined) {
         item.dose = Number(row.dose)
       }
@@ -848,6 +852,7 @@
       const item = { takenAt: row.takenAt }
       if (row.medication) item.medication = row.medication
       if (row.status) item.status = row.status
+      if (row.lineLabel) item.lineLabel = row.lineLabel
       if (row.dose !== '' && row.dose !== null && row.dose !== undefined) {
         item.dose = Number(row.dose)
       }
@@ -872,11 +877,13 @@
 
     return {
       format: 'bioclock-import',
-      version: 2,
+      version: 3,
       medications,
       injections,
       oralLogs,
       symptoms,
+      lineStates: state.lineStates,
+      efficacyEvents: state.efficacyEvents,
     }
   }
 
@@ -884,8 +891,8 @@
     $('json-preview').textContent = JSON.stringify(buildPayload(), null, 2)
   }
 
-  const INJECTION_HEADERS = ['注射时间', '药物', '剂量', '单位', '部位', '批号', '备注']
-  const ORAL_HEADERS = ['记录时间', '药物', '状态', '剂量', '单位', '备注']
+  const INJECTION_HEADERS = ['注射时间', '药物', '状态', '用药线', '剂量', '单位', '部位', '批号', '备注']
+  const ORAL_HEADERS = ['记录时间', '药物', '状态', '用药线', '剂量', '单位', '备注']
   const SYMPTOM_HEADERS = [
     '记录时间',
     '严重程度',
@@ -919,6 +926,8 @@
     return sortByTime(state.injections, 'injectedAt').map((row) => [
       row.injectedAt,
       row.medication,
+      ORAL_STATUS_LABELS[row.status] || ORAL_STATUS_LABELS.done,
+      row.lineLabel,
       row.dose === '' ? '' : Number(row.dose),
       row.unit,
       labelOfSite(row.site),
@@ -932,6 +941,7 @@
       row.takenAt,
       row.medication,
       ORAL_STATUS_LABELS[row.status] || ORAL_STATUS_LABELS.done,
+      row.lineLabel,
       row.dose === '' ? '' : Number(row.dose),
       row.unit,
       row.note,
@@ -971,12 +981,12 @@
     const workbook = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(
       workbook,
-      buildSheet(INJECTION_HEADERS, injections, [18, 16, 8, 8, 12, 12, 28]),
+      buildSheet(INJECTION_HEADERS, injections, [18, 16, 10, 14, 8, 8, 12, 12, 28]),
       '注射记录',
     )
     XLSX.utils.book_append_sheet(
       workbook,
-      buildSheet(ORAL_HEADERS, oralLogs, [18, 16, 10, 8, 8, 28]),
+      buildSheet(ORAL_HEADERS, oralLogs, [18, 16, 10, 14, 8, 8, 28]),
       '口服打卡',
     )
     XLSX.utils.book_append_sheet(
@@ -1100,6 +1110,8 @@
     return {
       injectedAt: String(row.injectedAt || ''),
       medication: String(row.medication || ''),
+      status: ORAL_STATUS_LABELS[row.status] ? row.status : 'done',
+      lineLabel: String(row.lineLabel || ''),
       dose: row.dose === null || row.dose === undefined ? '' : String(row.dose),
       unit: String(row.unit || 'mg'),
       site: META.sites.some((item) => item.value === row.site) ? row.site : 'abdomen_ul',
@@ -1127,6 +1139,7 @@
       takenAt: String(row.takenAt || row.loggedAt || ''),
       medication: String(row.medication || ''),
       status: ORAL_STATUS_LABELS[row.status] ? row.status : 'done',
+      lineLabel: String(row.lineLabel || ''),
       dose: row.dose === null || row.dose === undefined ? '' : String(row.dose),
       unit: String(row.unit || 'mg'),
       note: String(row.note || ''),
@@ -1178,8 +1191,12 @@
       const text = await file.text()
       const data = JSON.parse(text)
       const version = data && Number(data.version)
-      if (!data || data.format !== 'bioclock-import' || (version !== 1 && version !== 2)) {
-        throw new Error('不是 BioClock 的导入文件（只支持版本 1 和 2）')
+      if (
+        !data ||
+        data.format !== 'bioclock-import' ||
+        (version !== 1 && version !== 2 && version !== 3)
+      ) {
+        throw new Error('不是 BioClock 的导入文件（只支持版本 1、2、3）')
       }
       const medications = Array.isArray(data.medications) ? data.medications : []
       const injections = Array.isArray(data.injections) ? data.injections : []
@@ -1202,6 +1219,8 @@
       state.injections = injections.map(normalizeInjection)
       state.oralLogs = oralLogs.map(normalizeOral)
       state.symptoms = symptoms.map(normalizeSymptom)
+      state.lineStates = Array.isArray(data.lineStates) ? data.lineStates : []
+      state.efficacyEvents = Array.isArray(data.efficacyEvents) ? data.efficacyEvents : []
       state.customTags = Array.from(
         new Set([
           ...state.customTags,

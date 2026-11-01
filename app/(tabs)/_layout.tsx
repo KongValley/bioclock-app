@@ -4,8 +4,6 @@ import { Tabs, useRouter } from 'expo-router'
 import { useTheme } from '@/ui/theme'
 import { zh } from '@/i18n/zh'
 import { useAppStore, errorMessage } from '@/store/app'
-import { AppLockGate } from '@/ui/components/AppLockGate'
-import { ToastHost } from '@/ui/components/Toast'
 import { ErrorView, LoadingView } from '@/ui/components/StateView'
 import { Icon, type IconName } from '@/ui/components/Icon'
 import { Screen } from '@/ui/components/Layout'
@@ -55,55 +53,52 @@ export default function TabsLayout() {
 
   return (
     <View style={styles.root}>
-      <AppLockGate>
-        <Tabs
-          screenOptions={{
-            headerShown: false,
-            tabBarActiveTintColor: theme.colors.primary,
-            tabBarInactiveTintColor: theme.colors.textTertiary,
-            tabBarStyle: {
-              backgroundColor: theme.colors.surface,
-              borderTopColor: theme.colors.border,
-            },
-            tabBarLabelStyle: { fontSize: theme.fontSize.xs },
-            sceneStyle: { backgroundColor: theme.colors.background },
+      <Tabs
+        screenOptions={{
+          headerShown: false,
+          tabBarActiveTintColor: theme.colors.primary,
+          tabBarInactiveTintColor: theme.colors.textTertiary,
+          tabBarStyle: {
+            backgroundColor: theme.colors.surface,
+            borderTopColor: theme.colors.border,
+          },
+          tabBarLabelStyle: { fontSize: theme.fontSize.xs },
+          sceneStyle: { backgroundColor: theme.colors.background },
+        }}
+      >
+        <Tabs.Screen
+          name="index"
+          options={{
+            title: zh.tabs.today,
+            tabBarAccessibilityLabel: zh.tabs.today,
+            tabBarIcon: ({ color }) => <TabIcon name="home" color={color} />,
           }}
-        >
-          <Tabs.Screen
-            name="index"
-            options={{
-              title: zh.tabs.today,
-              tabBarAccessibilityLabel: zh.tabs.today,
-              tabBarIcon: ({ color }) => <TabIcon name="home" color={color} />,
-            }}
-          />
-          <Tabs.Screen
-            name="history"
-            options={{
-              title: zh.tabs.history,
-              tabBarAccessibilityLabel: zh.tabs.history,
-              tabBarIcon: ({ color }) => <TabIcon name="list" color={color} />,
-            }}
-          />
-          <Tabs.Screen
-            name="trends"
-            options={{
-              title: zh.tabs.trends,
-              tabBarAccessibilityLabel: zh.tabs.trends,
-              tabBarIcon: ({ color }) => <TabIcon name="activity" color={color} />,
-            }}
-          />
-          <Tabs.Screen
-            name="settings"
-            options={{
-              title: zh.tabs.settings,
-              tabBarAccessibilityLabel: zh.tabs.settings,
-              tabBarIcon: ({ color }) => <TabIcon name="settings" color={color} />,
-            }}
-          />
-        </Tabs>
-      </AppLockGate>
-      <ToastHost />
+        />
+        <Tabs.Screen
+          name="history"
+          options={{
+            title: zh.tabs.history,
+            tabBarAccessibilityLabel: zh.tabs.history,
+            tabBarIcon: ({ color }) => <TabIcon name="list" color={color} />,
+          }}
+        />
+        <Tabs.Screen
+          name="trends"
+          options={{
+            title: zh.tabs.trends,
+            tabBarAccessibilityLabel: zh.tabs.trends,
+            tabBarIcon: ({ color }) => <TabIcon name="activity" color={color} />,
+          }}
+        />
+        <Tabs.Screen
+          name="settings"
+          options={{
+            title: zh.tabs.settings,
+            tabBarAccessibilityLabel: zh.tabs.settings,
+            tabBarIcon: ({ color }) => <TabIcon name="settings" color={color} />,
+          }}
+        />
+      </Tabs>
     </View>
   )
 }
