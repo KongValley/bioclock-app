@@ -35,8 +35,18 @@ async function openAndMigrate(): Promise<SQLite.SQLiteDatabase> {
       `数据库版本（${current}）高于当前应用支持的版本（${SCHEMA_VERSION}），请更新 BioClock 后再试`,
     )
   }
-  if (current < SCHEMA_VERSION) {
-    await migrate(db, current)
+  // 某些老版本库没写 user_version，但表已经存在：按老库处理，避免只建表、留下缺列的旧表。
+  let effective = current
+  if (current === 0) {
+    const legacy = await db.getFirstAsync<{ name: string }>(
+      `SELECT name FROM sqlite_master
+        WHERE type = 'table' AND name IN ('regimen', 'regimen_phase', 'injection')
+        LIMIT 1`,
+    )
+    if (legacy) effective = 1
+  }
+  if (effective < SCHEMA_VERSION) {
+    await migrate(db, effective)
   }
 
   await seedBuiltinMedications(db)

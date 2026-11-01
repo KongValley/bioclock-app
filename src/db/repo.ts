@@ -1096,12 +1096,18 @@ export const treatments = {
       }
       if (linePatch.isHost !== undefined) {
         isHost = normalizeBoolean(linePatch.isHost, '主药标记') ? 1 : 0
+        if (isHost === 1 && lineRow.kind === 'oral') fail('口服用药不能设为主药')
         sets.push('is_host = ?')
         values.push(isHost)
       }
       if (linePatch.syncWithHost !== undefined) {
+        const sync = normalizeBoolean(linePatch.syncWithHost, '跟随主药标记')
+        if (sync && (linePatch.isHost === true || (linePatch.isHost === undefined && lineRow.is_host === 1))) {
+          fail('主药不能同时跟随其他主药')
+        }
+        if (sync && lineRow.kind === 'oral') fail('口服用药不参与跟随主药')
         sets.push('sync_with_host = ?')
-        values.push(normalizeBoolean(linePatch.syncWithHost, '跟随主药标记') ? 1 : 0)
+        values.push(sync ? 1 : 0)
       }
 
       let phases: TreatmentPhaseRow[] | null = null

@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router'
 import { useTheme } from '@/ui/theme'
 import { zh } from '@/i18n/zh'
 import { useAppStore, errorMessage as readError } from '@/store/app'
-import { buildSchedule, type SchedulePlan } from '@/domain/schedule'
+import { buildSchedule, selectNextPlan, type SchedulePlan } from '@/domain/schedule'
 import { recommendSite, SITE_LABELS } from '@/domain/rotation'
 import { NOTIFY_PREP_HINT } from '@/notify/scheduler'
 import type { DoseLogInput } from '@/db/repo'
@@ -98,12 +98,13 @@ export default function TodayScreen() {
   // 每条线第一条未完成的计划（plans 已按时间升序，取首个即可）。
   const nextPlanByLine = useMemo(() => {
     const map = new Map<string, SchedulePlan>()
-    for (const plan of plans) {
-      if (plan.status === 'done' || plan.status === 'missed') continue
-      if (!map.has(plan.lineId)) map.set(plan.lineId, plan)
+    for (const line of lines) {
+      const linePlans = plans.filter((plan) => plan.lineId === line.id)
+      const next = selectNextPlan(linePlans, now)
+      if (next) map.set(line.id, next)
     }
     return map
-  }, [plans])
+  }, [plans, lines, now])
 
   // 「今天要做」：每条线下一步里，今天到期或已逾期的计划。
   const todoPlans = useMemo(() => {
@@ -299,7 +300,7 @@ export default function TodayScreen() {
           <Button
             label="口服打卡"
             variant="secondary"
-            onPress={() => openOral(line.id, plan?.plannedAt)}
+            onPress={() => openOral(line.id, plan && plan.status === 'due' ? plan.plannedAt : undefined)}
             style={{ marginTop: theme.spacing.md }}
           />
         ) : null}

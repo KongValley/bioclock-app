@@ -32,11 +32,11 @@ export async function exportJson(): Promise<{ path: string; filename: string }> 
   ])
 
   const medicationById = new Map(allMedications.map((medication) => [medication.id, medication]))
+  const active = allTreatments.find((treatment) => treatment.isActive) ?? null
   const lineById = new Map<string, TreatmentLine>()
-  for (const treatment of allTreatments) {
-    for (const line of treatment.lines) lineById.set(line.id, line)
-  }
-  const logById = new Map(allLogs.map((log) => [log.id, log]))
+  for (const line of active?.lines ?? []) lineById.set(line.id, line)
+  const scopedLogs = allLogs.filter((log) => lineById.has(log.lineId))
+  const logById = new Map(scopedLogs.map((log) => [log.id, log]))
 
   const medicationsPayload = allMedications.map((medication) => ({
     name: medication.name,
@@ -49,7 +49,7 @@ export async function exportJson(): Promise<{ path: string; filename: string }> 
     extra: medication.extra,
   }))
 
-  const sortedLogs = [...allLogs].sort((a, b) => logTime(a) - logTime(b))
+  const sortedLogs = [...scopedLogs].sort((a, b) => logTime(a) - logTime(b))
 
   const injections = sortedLogs
     .filter((log) => lineById.get(log.lineId)?.kind === 'injection')

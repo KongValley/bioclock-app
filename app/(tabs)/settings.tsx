@@ -372,7 +372,7 @@ function newLineDraft(kind: LineKind, medications: Medication[]): LineDraft {
     medicationId: medication?.id ?? '',
     label: medication?.name ?? '',
     isHost: false,
-    syncWithHost: kind === 'injection',
+    syncWithHost: false,
     anchor: 'actual',
     windowDays: 2,
     phases: [defaultPhase()],

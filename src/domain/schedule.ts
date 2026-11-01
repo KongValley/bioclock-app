@@ -634,19 +634,43 @@ export function buildSchedule(input: ScheduleInput): SchedulePlan[] {
   return all.sort((a, b) => a.plannedAt - b.plannedAt)
 }
 
-/** 所有线里第一条未完成的计划（跳过已完成 / 已判定漏掉） */
-export function nextDose(input: ScheduleInput): SchedulePlan | null {
+/** 从一条线的计划里挑「下一步」：优先今天到期，其次最近的未来，最后才是最近一次逾期。 */
+export function selectNextPlan(plans: SchedulePlan[], now: number): SchedulePlan | null {
+  const actionable = plans.filter(
+    (plan) => plan.status !== 'done' && plan.status !== 'missed',
+  )
+  if (actionable.length === 0) return null
+
+  const dayStart = new Date(now)
+  dayStart.setHours(0, 0, 0, 0)
+  const todayStart = dayStart.getTime()
+  const todayEnd = todayStart + DAY
+
+  const dueToday = actionable.find(
+    (plan) => plan.plannedAt >= todayStart && plan.plannedAt < todayEnd,
+  )
+  if (dueToday) return dueToday
+
+  const upcoming = actionable
+    .filter((plan) => plan.plannedAt >= todayEnd)
+    .sort((a, b) => a.plannedAt - b.plannedAt)[0]
+  if (upcoming) return upcoming
+
   return (
-    buildSchedule(input).find(
-      (plan) => plan.status === 'upcoming' || plan.status === 'due' || plan.status === 'overdue',
-    ) ?? null
+    actionable
+      .filter((plan) => plan.plannedAt < todayStart)
+      .sort((a, b) => b.plannedAt - a.plannedAt)[0] ?? null
   )
 }
 
-/** 指定线里第一条未完成的计划 */
+/** 所有线里最该关注的下一步 */
+export function nextDose(input: ScheduleInput): SchedulePlan | null {
+  return selectNextPlan(buildSchedule(input), input.now)
+}
+
+/** 指定线里最该关注的下一步 */
 export function nextDoseForLine(input: LineScheduleInput): SchedulePlan | null {
-  const plans = buildLineSchedule(input)
-  return plans.find((plan) => plan.status !== 'done' && plan.status !== 'missed') ?? null
+  return selectNextPlan(buildLineSchedule(input), input.now)
 }
 
 /**

@@ -23,7 +23,7 @@ export async function seedBuiltinMedications(db: SQLiteDatabase): Promise<void> 
     const existing = await db.getFirstAsync<{ id: string }>(
       `SELECT id FROM medication
         WHERE catalog_key = ?
-           OR (is_builtin = 1 AND generic_name = ?)
+           OR (is_builtin = 1 AND catalog_key IS NULL AND generic_name = ?)
         LIMIT 1`,
       drug.key,
       drug.genericName,

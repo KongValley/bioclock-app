@@ -57,13 +57,19 @@ export default function OralModal() {
     [treatment],
   )
 
+  const [selectedLineId, setSelectedLineId] = useState<string>(paramLineId ?? '')
+  useEffect(() => {
+    if (oralLines.length === 0) return
+    if (oralLines.some((item) => item.id === selectedLineId)) return
+    setSelectedLineId(paramLineId && oralLines.some((item) => item.id === paramLineId)
+      ? paramLineId
+      : oralLines[0].id)
+  }, [oralLines, selectedLineId, paramLineId])
+
   const line: TreatmentLine | null = useMemo(() => {
-    if (paramLineId) {
-      const found = treatment?.lines.find((item) => item.id === paramLineId)
-      if (found) return found
-    }
-    return oralLines[0] ?? null
-  }, [paramLineId, treatment, oralLines])
+    const found = oralLines.find((item) => item.id === selectedLineId)
+    return found ?? oralLines[0] ?? null
+  }, [oralLines, selectedLineId])
 
   const medication: Medication | null = useMemo(
     () => (line ? medications.find((item) => item.id === line.medicationId) ?? null : null),
@@ -207,6 +213,46 @@ export default function OralModal() {
                   gap: theme.spacing.lg,
                 }}
               >
+                {oralLines.length > 1 ? (
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                    {oralLines.map((item) => {
+                      const selected = item.id === line?.id
+                      const label =
+                        medications.find((med) => med.id === item.medicationId)?.name ?? item.label
+                      return (
+                        <Pressable
+                          key={item.id}
+                          accessibilityRole="button"
+                          accessibilityLabel={label}
+                          accessibilityState={{ selected }}
+                          onPress={() => setSelectedLineId(item.id)}
+                          style={({ pressed }) => [
+                            styles.chip,
+                            {
+                              borderColor: selected ? theme.colors.primary : theme.colors.border,
+                              backgroundColor: selected
+                                ? theme.colors.primaryMuted
+                                : theme.colors.surface,
+                              borderRadius: theme.radius.pill,
+                              opacity: pressed ? 0.75 : 1,
+                            },
+                          ]}
+                        >
+                          <Text
+                            style={{
+                              color: selected ? theme.colors.primary : theme.colors.textSecondary,
+                              fontSize: theme.fontSize.sm,
+                              fontWeight: selected ? '600' : '400',
+                            }}
+                          >
+                            {label}
+                          </Text>
+                        </Pressable>
+                      )
+                    })}
+                  </View>
+                ) : null}
+
                 {!line ? (
                   <InlineError message="没有可登记的口服用药，请先在设置里添加口服用药。" />
                 ) : (
@@ -289,6 +335,12 @@ const styles = StyleSheet.create({
   overlay: {
     flex: 1,
     justifyContent: 'flex-end',
+  },
+  chip: {
+    minHeight: 40,
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    borderWidth: 1,
   },
   keyboard: {
     flex: 1,
