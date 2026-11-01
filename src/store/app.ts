@@ -16,6 +16,8 @@ import {
   type TreatmentPatch,
 } from '@/db/repo'
 import { rescheduleAll } from '@/notify/scheduler'
+import { buildInjectionPlans, selectNextPlan } from '@/domain/schedule'
+import { buildIntervalChangePhases } from '@/domain/interval'
 import { importPayload, type ImportResult } from '@/import'
 import type { ImportPayload } from '@/import/schema'
 import type {
@@ -83,6 +85,7 @@ export interface AppStore {
   addEfficacyEvent(input: EfficacyEventInput): Promise<MutationResult>
   removeEfficacyEvent(id: string): Promise<MutationResult>
   setLineEnded(lineId: string, endedAt: number | null): Promise<MutationResult>
+  changeInjectionInterval(lineId: string, intervalDays: number): Promise<MutationResult>
   saveTreatment(input: SaveTreatmentInput): Promise<MutationResult>
   setActiveTreatment(id: string, active: boolean): Promise<MutationResult>
   updateReminder(input: ReminderRuleInput): Promise<MutationResult>
@@ -245,6 +248,26 @@ export const useAppStore = create<AppStore>((set) => ({
 
   setLineEnded: async (lineId, endedAt) => {
     await treatmentRepo.setLineEnded(lineId, endedAt)
+    return { notifyWarning: await afterWrite() }
+  },
+
+  changeInjectionInterval: async (lineId, intervalDays) => {
+    const treatment = await treatmentRepo.getActive()
+    if (!treatment) throw new Error('还没有治疗方案')
+    const line = treatment.lines.find((item) => item.id === lineId)
+    if (!line || line.kind !== 'injection') throw new Error('找不到要调整的注射线')
+    if (line.endedAt !== null) throw new Error('这条用药线已停用，请先恢复')
+
+    const logs = await doseLogRepo.list(lineId)
+    const now = Date.now()
+    const plans = buildInjectionPlans({ line, logs, now, futureDoseCount: 4 })
+    const next = selectNextPlan(plans, now)
+    if (!next) throw new Error('这条用药线没有可调整的下一针')
+
+    const phases = buildIntervalChangePhases(line.phases, next.index, intervalDays)
+    await treatmentRepo.update(line.treatmentId, {
+      lines: [{ id: line.id, phases }],
+    })
     return { notifyWarning: await afterWrite() }
   },
 

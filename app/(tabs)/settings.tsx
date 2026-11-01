@@ -78,6 +78,16 @@ function efficacyKindLabel(kind: EfficacyKind): string {
   return EFFICACY_KIND_OPTIONS.find((item) => item.value === kind)?.label ?? '其他'
 }
 
+function intervalText(days: number): string {
+  if (days > 0 && days % 7 === 0) return `${days} 天（${days / 7} 周）`
+  return `${days} 天`
+}
+
+function lineIntervalDays(line: TreatmentLine): number {
+  const last = line.phases[line.phases.length - 1]
+  return last?.intervalDays ?? 56
+}
+
 /** 口服频次的人类可读描述：每周 N 次 / 每周固定几天 / 每天。 */
 function oralFrequencyText(oral: {
   frequency: OralFrequency
@@ -1583,6 +1593,7 @@ export default function SettingsScreen() {
   const updateReminder = useAppStore((state) => state.updateReminder)
   const updateSettings = useAppStore((state) => state.updateSettings)
   const setActiveTreatment = useAppStore((state) => state.setActiveTreatment)
+  const changeInjectionInterval = useAppStore((state) => state.changeInjectionInterval)
   const importRecords = useAppStore((state) => state.importRecords)
 
   const [reminderTime, setReminderTime] = useState('09:00')
@@ -1595,6 +1606,10 @@ export default function SettingsScreen() {
 
   const [editorOpen, setEditorOpen] = useState(false)
   const [efficacyOpen, setEfficacyOpen] = useState(false)
+  const [intervalOpen, setIntervalOpen] = useState(false)
+  const [intervalLineId, setIntervalLineId] = useState('')
+  const [intervalDays, setIntervalDays] = useState(56)
+  const [savingInterval, setSavingInterval] = useState(false)
   const [deactivateOpen, setDeactivateOpen] = useState(false)
   const [deactivating, setDeactivating] = useState(false)
 
@@ -2008,6 +2023,40 @@ export default function SettingsScreen() {
     if (warning) toast(warning, 'error')
   }
 
+  const intervalLines = treatment
+    ? treatment.lines.filter((line) => line.kind === 'injection' && line.endedAt === null)
+    : []
+  const selectedIntervalLine =
+    intervalLines.find((line) => line.id === intervalLineId) ?? intervalLines[0] ?? null
+
+  const openIntervalSheet = () => {
+    const first = intervalLines[0]
+    if (!first) return
+    setIntervalLineId(first.id)
+    setIntervalDays(lineIntervalDays(first))
+    setIntervalOpen(true)
+  }
+
+  const selectIntervalLine = (line: TreatmentLine) => {
+    setIntervalLineId(line.id)
+    setIntervalDays(lineIntervalDays(line))
+  }
+
+  const saveInterval = async () => {
+    if (!selectedIntervalLine) return
+    setSavingInterval(true)
+    try {
+      const result = await changeInjectionInterval(selectedIntervalLine.id, intervalDays)
+      setIntervalOpen(false)
+      toast(`已从下一针起改为每 ${intervalText(intervalDays)}`, 'success')
+      if (result.notifyWarning) toast(result.notifyWarning, 'error')
+    } catch (error) {
+      toast(errorMessage(error), 'error')
+    } finally {
+      setSavingInterval(false)
+    }
+  }
+
   const version = Constants.expoConfig?.version ?? '1.0.0'
   const activeEfficacyCount = treatment
     ? efficacyEvents.filter((event) => treatment.lines.some((line) => line.id === event.lineId))
@@ -2071,6 +2120,28 @@ export default function SettingsScreen() {
             />
           </Card>
         )}
+
+        {intervalLines.length > 0 ? (
+          <>
+            <SectionTitle
+              title="注射间隔"
+              hint="医生调整频率时，从下一针起生效，历史记录仍按原间隔显示"
+            />
+            <RowGroup>
+              <SettingRow
+                label="调整注射间隔"
+                hint="例如从 8 周改为 6 周，只影响下一针及以后"
+                value={
+                  intervalLines.length === 1
+                    ? intervalText(lineIntervalDays(intervalLines[0]))
+                    : `${intervalLines.length} 条注射线`
+                }
+                onPress={openIntervalSheet}
+                last
+              />
+            </RowGroup>
+          </>
+        ) : null}
 
         <SectionTitle
           title="疗效记录"
@@ -2441,6 +2512,106 @@ export default function SettingsScreen() {
           medications={medicines}
           events={efficacyEvents}
         />
+      </BottomSheet>
+
+      <BottomSheet
+        visible={intervalOpen}
+        title="调整注射间隔"
+        onClose={() => setIntervalOpen(false)}
+        height="70%"
+      >
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{
+            paddingHorizontal: theme.spacing.lg,
+            paddingBottom: theme.spacing.lg,
+            gap: theme.spacing.lg,
+          }}
+        >
+          {intervalLines.length > 1 ? (
+            <View style={{ gap: 8 }}>
+              <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
+                选择用药线
+              </Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                {intervalLines.map((line) => (
+                  <Chip
+                    key={line.id}
+                    label={medicines.find((med) => med.id === line.medicationId)?.name ?? line.label}
+                    selected={line.id === selectedIntervalLine?.id}
+                    onPress={() => selectIntervalLine(line)}
+                  />
+                ))}
+              </View>
+            </View>
+          ) : null}
+
+          <Card>
+            <View style={{ gap: theme.spacing.md }}>
+              <View style={{ gap: 4 }}>
+                <Text style={{ color: theme.colors.text, fontSize: theme.fontSize.md, fontWeight: '600' }}>
+                  {selectedIntervalLine
+                    ? medicines.find((med) => med.id === selectedIntervalLine.medicationId)?.name ??
+                      selectedIntervalLine.label
+                    : '注射线'}
+                </Text>
+                <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
+                  当前间隔：{selectedIntervalLine ? intervalText(lineIntervalDays(selectedIntervalLine)) : '—'}
+                </Text>
+              </View>
+
+              <View style={{ gap: 8 }}>
+                <Text style={{ color: theme.colors.textSecondary, fontSize: theme.fontSize.sm }}>
+                  快捷选择
+                </Text>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                  {[
+                    { days: 28, label: '4 周' },
+                    { days: 42, label: '6 周' },
+                    { days: 56, label: '8 周' },
+                  ].map((item) => (
+                    <Chip
+                      key={item.days}
+                      label={item.label}
+                      selected={intervalDays === item.days}
+                      onPress={() => setIntervalDays(item.days)}
+                    />
+                  ))}
+                </View>
+              </View>
+
+              <Stepper
+                label="新的间隔天数"
+                value={intervalDays}
+                onChange={setIntervalDays}
+                min={1}
+                max={365}
+                suffix="天"
+                decreaseLabel="间隔天数减少"
+                increaseLabel="间隔天数增加"
+              />
+
+              <Text
+                style={{
+                  color: theme.colors.textTertiary,
+                  fontSize: theme.fontSize.xs,
+                  lineHeight: theme.lineHeight.xs,
+                }}
+              >
+                调整后：下一针起每 {intervalText(intervalDays)}。之前的计划、打卡和趋势不会按新间隔重算。
+                具体频率请按医嘱设置，本应用只做提醒和记录。
+              </Text>
+
+              <Button
+                label="从下一针起调整"
+                onPress={() => {
+                  void saveInterval()
+                }}
+                loading={savingInterval}
+              />
+            </View>
+          </Card>
+        </ScrollView>
       </BottomSheet>
 
       <BottomSheet visible={diseaseOpen} title="选择病种（可多选）" onClose={() => setDiseaseOpen(false)}>

@@ -961,7 +961,12 @@ async function insertLine(db: SQLiteDatabase, line: NormalizedLine): Promise<voi
 export interface TreatmentPatch {
   name?: string
   /** 按 lineId 覆盖已有 line 的字段（phases 传给注射线时会整体替换） */
-  lines?: Array<Partial<Omit<TreatmentLine, 'id' | 'treatmentId' | 'kind'>> & { id: string }>
+  lines?: Array<
+    Partial<Omit<TreatmentLine, 'id' | 'treatmentId' | 'kind' | 'phases'>> & {
+      id: string
+      phases?: Array<Omit<TreatmentPhase, 'id' | 'lineId'>>
+    }
+  >
   /** 同一次事务里删除的用药线（级联删除打卡） */
   removeLines?: string[]
   /** 同一次事务里新增的用药线 */
