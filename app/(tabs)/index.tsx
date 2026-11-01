@@ -429,8 +429,18 @@ export default function TodayScreen() {
               }
             />
             <View style={{ marginTop: theme.spacing.sm }}>
-              <BodyMap selected={recommended} recommended={recommended} height={200} />
+              <BodyMap selected={recommended} recommended={recommended} height={250} />
             </View>
+            <Text
+              style={{
+                color: theme.colors.textTertiary,
+                fontSize: theme.fontSize.xs,
+                lineHeight: theme.lineHeight.xs,
+                marginTop: theme.spacing.xs,
+              }}
+            >
+              虚线椭圆是腹部建议注药区（脐周 5cm 以上），示意图只用于提示位置。
+            </Text>
           </Card>
         ) : null}
 
