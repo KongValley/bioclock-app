@@ -18,6 +18,13 @@
         "buildType": "apk"
       }
     },
+    "release-apk": {
+      "autoIncrement": true,
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      }
+    },
     "production": {
       "autoIncrement": true,
       "android": {
