@@ -93,16 +93,22 @@ describe('computeAdherence（注射线）', () => {
     expect(line.currentStreak).toBe(0)
   })
 
-  it('逾期未登记的针计入 missed，不拉低平均偏差', () => {
+  it('逾期超过一周的针才计入 missed，窗口内的逾期仍可补登记', () => {
     const logs = [injectionLog(0)]
-    const stats = computeAdherence([maintenancePlanned()], logs, T0 + 40 * DAY)
-    const line = injectionStatsOf(stats, 'line-host')
+    const recent = computeAdherence([maintenancePlanned()], logs, T0 + 20 * DAY)
+    const recentLine = injectionStatsOf(recent, 'line-host')
 
-    expect(line.total).toBe(1)
-    expect(line.avgDeviationDays).toBe(0)
-    expect(line.missed).toBe(2) // 第 14、28 天
-    expect(line.upcoming).toBe(2) // 第 42、56 天
-    expect(stats.rate).toBe(0.33) // 1 / (1 + 2)
+    // 第 14 天那针只逾期 6 天：不算漏
+    expect(recentLine.missed).toBe(0)
+
+    const late = computeAdherence([maintenancePlanned()], logs, T0 + 40 * DAY)
+    const lateLine = injectionStatsOf(late, 'line-host')
+
+    expect(lateLine.total).toBe(1)
+    expect(lateLine.avgDeviationDays).toBe(0)
+    expect(lateLine.missed).toBe(2) // 第 14、28 天
+    expect(lateLine.upcoming).toBe(2) // 第 42、56 天
+    expect(late.rate).toBe(0.33) // 1 / (1 + 2)
   })
 
   it('多条注射线分别统计', () => {
@@ -179,8 +185,9 @@ describe('computeAdherence（口服线，含漏服）', () => {
 
     expect(line.kind).toBe('oral')
     expect(line.total).toBe(2)
-    expect(line.missed).toBe(2) // 第 1 天爽约 + 第 3 天到点未打卡
-    expect(line.rate).toBe(0.5) // 2 / (2 + 2)
+    // 第 1 天爽约立刻算漏服；第 3 天只逾期 2 天，仍在补登记窗口内
+    expect(line.missed).toBe(1)
+    expect(line.rate).toBe(0.67) // 2 / (2 + 1)
   })
 
   it('全部按时打卡时完成率为 1', () => {
@@ -214,9 +221,10 @@ describe('computeAdherence（口服线，含漏服）', () => {
     const stats = computeAdherence([oral], logs, T0 + 6 * DAY)
     const line = oralStatsOf(stats, 'line-oral')
 
+    // weekly 只按「每周 N 次」均匀分布（周一、周五），第 3 天不在打卡点里
     expect(line.total).toBe(1)
-    expect(line.missed).toBe(1)
-    expect(line.rate).toBe(0.5)
+    expect(line.missed).toBe(0)
+    expect(line.rate).toBe(1)
   })
 
   it('汇总口径同时包含注射线与口服线', () => {

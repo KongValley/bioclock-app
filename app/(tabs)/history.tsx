@@ -11,6 +11,7 @@ import { Screen, ScreenHeader } from '@/ui/components/Layout'
 import { SegmentedControl } from '@/ui/components/SegmentedControl'
 import { StateView, LoadingView } from '@/ui/components/StateView'
 import { Fab } from '@/ui/components/Fab'
+import { Icon } from '@/ui/components/Icon'
 import { toast } from '@/ui/components/Toast'
 import {
   formatDate,
@@ -266,7 +267,7 @@ export default function HistoryScreen() {
             { opacity: pressed ? 0.5 : 1, borderRadius: theme.radius.sm },
           ]}
         >
-          <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.lg }}>⋯</Text>
+          <Icon name="more" size={20} color={theme.colors.textTertiary} strokeWidth={2.5} />
         </Pressable>
       </View>
     )
@@ -312,7 +313,7 @@ export default function HistoryScreen() {
               { opacity: pressed ? 0.5 : 1, borderRadius: theme.radius.sm },
             ]}
           >
-            <Text style={{ color: theme.colors.textTertiary, fontSize: theme.fontSize.lg }}>⋯</Text>
+            <Icon name="more" size={20} color={theme.colors.textTertiary} strokeWidth={2.5} />
           </Pressable>
         </View>
         {symptom.tags.length > 0 ? (

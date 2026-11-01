@@ -15,7 +15,7 @@ export function useNow(intervalMs: number = 30_000): number {
 
 /**
  * 应用锁开启时，如果 App 在后台超过 30 秒再回前台，
- * 关闭当前独立于 Tabs 的全屏 Modal，让 Tabs 里的锁屏重新接管。
+ * 关闭当前独立于 Tabs 的全屏 Modal，让根 Stack 外的锁屏重新接管。
  */
 export function useDismissOnRelock(onRelock: () => void, enabled: boolean): void {
   const callback = useRef(onRelock)

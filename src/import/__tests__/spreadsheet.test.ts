@@ -95,6 +95,19 @@ describe('Excel 导入', () => {
     expect(payload.medications[0].route).toBe('oral')
   })
 
+  it('单表有「状态」列时按口服打卡识别，不会误当成注射', () => {
+    const wb = workbook({
+      Sheet1: [
+        ['记录时间', '药物', '状态', '剂量', '单位'],
+        ['2026-03-02 08:00', '甲氨蝶呤', '已用', 10, 'mg'],
+      ],
+    })
+    const payload = parseSpreadsheet(toBytes(wb))
+    expect(payload.injections).toHaveLength(0)
+    expect(payload.oralLogs).toHaveLength(1)
+    expect(payload.oralLogs[0].status).toBe('done')
+  })
+
   it('支持 Excel 日期序列号', () => {
     // 2026-03-15 09:00 的 Excel 序列号
     const serial = 46096 + 9 / 24

@@ -222,6 +222,8 @@ function buildInjectionDrafts(input: {
       const rawTriggerAt = atLocalMinutes(day, reminderMinutes)
       if (rawTriggerAt > horizon) continue
       const triggerAt = shiftOutOfDnd(rawTriggerAt, dnd)
+      // 顺延到别的日期后文案的「今天/明天」就不成立了，直接丢弃这条草稿。
+      if (!sameLocalDay(triggerAt, rawTriggerAt)) continue
       if (triggerAt <= now || !claimDraftKey(seen, plan.lineId, plan.plannedAt, triggerAt)) continue
 
       const content = buildReminderContent({
@@ -246,7 +248,12 @@ function buildInjectionDrafts(input: {
       const rawTriggerAt = atLocalMinutes(plan.plannedAt, EVENING_CATCH_UP_MINUTES)
       if (rawTriggerAt > horizon) continue
       const triggerAt = shiftOutOfDnd(rawTriggerAt, dnd)
-      if (triggerAt > now && claimDraftKey(seen, plan.lineId, plan.plannedAt, triggerAt)) {
+      // 跨日顺延后就不再是「今天还没登记」，丢弃。
+      if (
+        sameLocalDay(triggerAt, rawTriggerAt) &&
+        triggerAt > now &&
+        claimDraftKey(seen, plan.lineId, plan.plannedAt, triggerAt)
+      ) {
         const content = buildReminderContent({
           medicationName,
           dose: plan.dose,
@@ -256,9 +263,9 @@ function buildInjectionDrafts(input: {
           route,
         })
         drafts.push({
-        lineId: plan.lineId,
-        kind: 'injection',
-        plannedAt: plan.plannedAt,
+          lineId: plan.lineId,
+          kind: 'injection',
+          plannedAt: plan.plannedAt,
           triggerAt,
           title: content.title,
           body: content.body,
@@ -300,6 +307,8 @@ function buildOralDrafts(input: {
 
     const day = startOfLocalDay(plan.plannedAt)
     const remindMinutes = parseTimeOfDay(line.oral.remindTime, DEFAULT_REMINDER_MINUTES)
+    // 当天提醒时间已经过了就不再补排，避免顺延到次日变成错位提醒。
+    if (atLocalMinutes(day, remindMinutes) <= now) continue
     const key = `${day}|${remindMinutes}`
     const medication = medicationById.get(line.medicationId)
     const name = medication?.name ?? line.label
@@ -317,6 +326,8 @@ function buildOralDrafts(input: {
   for (const group of byDay.values()) {
     const rawTriggerAt = atLocalMinutes(group.day, group.remindMinutes)
     const triggerAt = shiftOutOfDnd(rawTriggerAt, dnd)
+    // 免打扰顺延到次日就不再提示「今天该服药」，直接跳过。
+    if (!sameLocalDay(triggerAt, rawTriggerAt)) continue
     if (triggerAt <= now) continue
 
     const content = buildOralContent(group.names)
@@ -450,6 +461,10 @@ function startOfLocalDay(timestamp: number): number {
   const date = new Date(timestamp)
   date.setHours(0, 0, 0, 0)
   return date.getTime()
+}
+
+function sameLocalDay(a: number, b: number): boolean {
+  return startOfLocalDay(a) === startOfLocalDay(b)
 }
 
 function claimDraftKey(

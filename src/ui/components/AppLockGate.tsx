@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useAppStore } from '@/store/app'
 import { useTheme } from '@/ui/theme'
 import { Button } from './Button'
+import { Icon } from './Icon'
 
 /**
  * 应用锁。
@@ -111,7 +112,7 @@ export function AppLockGate({ children }: { children: ReactNode }) {
       ]}
     >
       <View style={styles.lockBody}>
-        <Text style={{ fontSize: 44, color: theme.colors.primary }}>🔒</Text>
+        <Icon name="lock" size={44} color={theme.colors.primary} strokeWidth={1.5} />
         <Text
           accessibilityRole="header"
           style={{

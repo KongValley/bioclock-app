@@ -81,15 +81,15 @@ function formatDate(date: Date): string {
   )}:${pad(date.getMinutes())}`
 }
 
-function serialToText(serial: number): string {
-  const parsed = XLSX.SSF.parse_date_code(serial)
+function serialToText(serial: number, date1904 = false): string {
+  const parsed = XLSX.SSF.parse_date_code(serial, { date1904 })
   if (!parsed) return String(serial)
   return `${parsed.y}-${pad(parsed.m)}-${pad(parsed.d)} ${pad(parsed.H)}:${pad(parsed.M)}`
 }
 
-function dateCellText(value: unknown): string {
+function dateCellText(value: unknown, date1904 = false): string {
   if (value instanceof Date) return formatDate(value)
-  if (typeof value === 'number') return serialToText(value)
+  if (typeof value === 'number') return serialToText(value, date1904)
   return String(value ?? '').trim()
 }
 
@@ -179,17 +179,17 @@ function splitList(value: unknown): string[] {
   return raw.map((item) => plainText(item)).filter((item) => item !== '')
 }
 
-function normalizeRows(rows: Row[], kind: RowKind): Row[] {
+function normalizeRows(rows: Row[], kind: RowKind, date1904: boolean): Row[] {
   return rows.map((row) => {
     const next: Row = { ...row }
     if (kind === 'injection') {
-      if (next.injectedAt !== undefined) next.injectedAt = dateCellText(next.injectedAt)
+      if (next.injectedAt !== undefined) next.injectedAt = dateCellText(next.injectedAt, date1904)
       if (next.site !== undefined) next.site = plainText(next.site)
       if (next.status !== undefined) next.status = plainText(next.status)
       if (next.lineLabel !== undefined) next.lineLabel = plainText(next.lineLabel)
     } else if (kind === 'symptom') {
-      if (next.loggedAt !== undefined) next.loggedAt = dateCellText(next.loggedAt)
-      if (next.injectionAt !== undefined) next.injectionAt = dateCellText(next.injectionAt)
+      if (next.loggedAt !== undefined) next.loggedAt = dateCellText(next.loggedAt, date1904)
+      if (next.injectionAt !== undefined) next.injectionAt = dateCellText(next.injectionAt, date1904)
       if (next.tags !== undefined) next.tags = splitList(next.tags)
     } else if (kind === 'medication') {
       for (const key of ['name', 'genericName', 'route', 'unit', 'catalogKey'] as const) {
@@ -197,7 +197,7 @@ function normalizeRows(rows: Row[], kind: RowKind): Row[] {
       }
       if (next.brandNames !== undefined) next.brandNames = splitList(next.brandNames)
     } else {
-      if (next.takenAt !== undefined) next.takenAt = dateCellText(next.takenAt)
+      if (next.takenAt !== undefined) next.takenAt = dateCellText(next.takenAt, date1904)
       for (const key of ['medication', 'status', 'unit', 'note', 'lineLabel'] as const) {
         if (next[key] !== undefined) next[key] = plainText(next[key])
       }
@@ -220,6 +220,18 @@ function looksLikeInjection(matrix: unknown[][]): boolean {
   if (matrix.length === 0) return false
   const index = buildIndex(matrix[0], INJECTION_ALIASES)
   return index.injectedAt !== undefined && index.medication !== undefined
+}
+
+/**
+ * 单表容易歧义（注射和口服都叫「时间 / 药物」）。
+ * 有「注射部位 / 批号」这类注射特有的列，或明显没有口服特征时，才按注射表处理。
+ */
+function looksLikeInjectionOnly(matrix: unknown[][]): boolean {
+  if (!looksLikeInjection(matrix)) return false
+  const index = buildIndex(matrix[0], INJECTION_ALIASES)
+  if (index.site !== undefined || index.lotNumber !== undefined) return true
+  const oralIndex = buildIndex(matrix[0], ORAL_ALIASES)
+  return oralIndex.status === undefined && oralIndex.lineLabel === undefined
 }
 
 function looksLikeSymptom(matrix: unknown[][]): boolean {
@@ -249,6 +261,8 @@ function looksLikeMedication(matrix: unknown[][]): boolean {
 export function parseSpreadsheet(data: ArrayBuffer | Uint8Array): ImportPayload {
   const bytes = data instanceof Uint8Array ? data : new Uint8Array(data)
   const workbook = XLSX.read(bytes, { type: 'array', cellDates: false })
+  // Excel for Mac 的 1904 日期系统会把序列号整体偏 1462 天，必须按工作簿设置解析。
+  const date1904 = workbook.Workbook?.WBProps?.date1904 === true
 
   let injectionRows: Row[] = []
   let symptomRows: Row[] = []
@@ -270,7 +284,7 @@ export function parseSpreadsheet(data: ArrayBuffer | Uint8Array): ImportPayload 
     const first = workbook.SheetNames[0]
     if (!first) throw new Error('工作簿里没有工作表')
     const matrix = sheetToMatrix(workbook.Sheets[first])
-    if (looksLikeInjection(matrix)) injectionRows = parseInjectionMatrix(matrix)
+    if (looksLikeInjectionOnly(matrix)) injectionRows = parseInjectionMatrix(matrix)
     else if (looksLikeSymptom(matrix)) symptomRows = parseSymptomMatrix(matrix)
     else if (looksLikeOral(matrix)) oralRows = parseOralMatrix(matrix)
     else if (looksLikeMedication(matrix)) medicationRows = parseMedicationMatrix(matrix)
@@ -282,9 +296,9 @@ export function parseSpreadsheet(data: ArrayBuffer | Uint8Array): ImportPayload 
   }
 
   return parseImportRows(
-    normalizeRows(medicationRows, 'medication'),
-    normalizeRows(injectionRows, 'injection'),
-    normalizeRows(oralRows, 'oral'),
-    normalizeRows(symptomRows, 'symptom'),
+    normalizeRows(medicationRows, 'medication', date1904),
+    normalizeRows(injectionRows, 'injection', date1904),
+    normalizeRows(oralRows, 'oral', date1904),
+    normalizeRows(symptomRows, 'symptom', date1904),
   )
 }

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
-  Alert,
   FlatList,
   KeyboardAvoidingView,
   Modal,
@@ -671,21 +670,12 @@ function TreatmentEditor({
     closeLine()
   }
 
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null)
+
   const removeLine = (key: string) => {
     const target = lines.find((line) => line.key === key)
     if (target?.id) {
-      Alert.alert(
-        '删除这条用药线？',
-        '这条线的历史打卡记录会一起删除，且无法恢复。只是暂时不打这种药的话，可以停用整个治疗方案。',
-        [
-          { text: zh.common.cancel, style: 'cancel' },
-          {
-            text: zh.common.delete,
-            style: 'destructive',
-            onPress: () => setLines((current) => current.filter((line) => line.key !== key)),
-          },
-        ],
-      )
+      setPendingDelete(key)
       return
     }
     setLines((current) => current.filter((line) => line.key !== key))
@@ -836,6 +826,20 @@ function TreatmentEditor({
         }}
         loading={saving}
         size="lg"
+      />
+
+      <ConfirmDialog
+        visible={pendingDelete !== null}
+        title="删除这条用药线？"
+        message="这条线的历史打卡记录会一起删除，且无法恢复。只是暂时不打这种药的话，可以在保存后到「疗效记录」里停用这条线。"
+        confirmLabel={zh.common.delete}
+        destructive
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={() => {
+          const key = pendingDelete
+          setPendingDelete(null)
+          if (key) setLines((current) => current.filter((line) => line.key !== key))
+        }}
       />
     </ScrollView>
   )
@@ -1286,6 +1290,7 @@ function EfficacyManager({
   const [stopLine, setStopLine] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<EfficacyEvent | null>(null)
 
   const orderedLines = useMemo(
     () =>
@@ -1368,32 +1373,14 @@ function EfficacyManager({
     }
   }
 
-  const confirmRemove = (event: EfficacyEvent) => {
-    const line = lines.find((item) => item.id === event.lineId)
-    Alert.alert(
-      '删除疗效记录',
-      `确定删除${line ? lineName(line) : '这条用药线'}在 ${formatDate(event.occurredAt)} 的「${efficacyKindLabel(
-        event.kind,
-      )}」记录吗？用药线不会自动恢复。`,
-      [
-        { text: zh.common.cancel, style: 'cancel' },
-        {
-          text: zh.common.delete,
-          style: 'destructive',
-          onPress: () => {
-            void (async () => {
-              try {
-                const result = await removeEfficacyEvent(event.id)
-                toast('已删除疗效记录', 'success')
-                if (result.notifyWarning) toast(result.notifyWarning, 'error')
-              } catch (err) {
-                toast(errorMessage(err), 'error')
-              }
-            })()
-          },
-        },
-      ],
-    )
+  const removeEvent = async (event: EfficacyEvent) => {
+    try {
+      const result = await removeEfficacyEvent(event.id)
+      toast('已删除疗效记录', 'success')
+      if (result.notifyWarning) toast(result.notifyWarning, 'error')
+    } catch (err) {
+      toast(errorMessage(err), 'error')
+    }
   }
 
   return (
@@ -1530,7 +1517,7 @@ function EfficacyManager({
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel={`删除 ${efficacyKindLabel(event.kind)} 记录`}
-                    onPress={() => confirmRemove(event)}
+                    onPress={() => setDeleteTarget(event)}
                     style={({ pressed }) => [
                       styles.iconButton,
                       {
@@ -1548,6 +1535,24 @@ function EfficacyManager({
           })
         )}
       </View>
+
+      <ConfirmDialog
+        visible={deleteTarget !== null}
+        title="删除疗效记录"
+        message={
+          deleteTarget
+            ? `确定删除「${efficacyKindLabel(deleteTarget.kind)}」这条记录吗？用药线不会自动恢复。`
+            : ''
+        }
+        confirmLabel={zh.common.delete}
+        destructive
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => {
+          const target = deleteTarget
+          setDeleteTarget(null)
+          if (target) void removeEvent(target)
+        }}
+      />
     </ScrollView>
   )
 }

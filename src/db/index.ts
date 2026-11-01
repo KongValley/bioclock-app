@@ -137,9 +137,9 @@ export async function initDatabase(): Promise<void> {
  */
 export async function resetDatabase(): Promise<void> {
   const db = await getDatabase()
-  await db.withTransactionAsync(async () => {
-    await db.execAsync(DELETE_ALL_BUSINESS_DATA_SQL)
-    await seedBuiltinMedications(db)
-    await seedBuiltinSymptomTags(db)
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    await txn.execAsync(DELETE_ALL_BUSINESS_DATA_SQL)
+    await seedBuiltinMedications(txn)
+    await seedBuiltinSymptomTags(txn)
   })
 }

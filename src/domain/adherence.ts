@@ -90,15 +90,27 @@ interface PlanLike {
   windowStatus?: 'on_time' | 'early' | 'late'
 }
 
+/**
+ * 逾期多久才算「漏」。
+ * 允许偏差窗口内的逾期仍可能补登记，不应该立刻拉低完成率。
+ */
+const MISSED_AFTER_DAYS = 7
+const DAY_MS = 24 * 60 * 60 * 1000
+
+function isMissedPlan(plan: PlanLike, now: number): boolean {
+  if (plan.status === 'missed') return true
+  if (plan.status !== 'overdue') return false
+  return now - plan.plannedAt > MISSED_AFTER_DAYS * DAY_MS
+}
+
 /** 从一串计划里抽出注射线的「按时 / 提前 / 迟到」口径 */
 function injectionStats(
   lineId: string,
   plans: PlanLike[],
+  now: number,
 ): InjectionLineAdherence {
   const donePlans = plans.filter((plan) => plan.status === 'done')
-  const missed = plans.filter(
-    (plan) => plan.status === 'missed' || plan.status === 'overdue',
-  ).length
+  const missed = plans.filter((plan) => isMissedPlan(plan, now)).length
   const upcoming = plans.filter(
     (plan) => plan.status === 'upcoming' || plan.status === 'due',
   ).length
@@ -137,11 +149,9 @@ function injectionStats(
 }
 
 /** 口服线：完成 / 漏服 / 完成率 */
-function oralStats(lineId: string, plans: PlanLike[]): OralLineAdherence {
+function oralStats(lineId: string, plans: PlanLike[], now: number): OralLineAdherence {
   const total = plans.filter((plan) => plan.status === 'done').length
-  const missed = plans.filter(
-    (plan) => plan.status === 'missed' || plan.status === 'overdue',
-  ).length
+  const missed = plans.filter((plan) => isMissedPlan(plan, now)).length
   const upcoming = plans.filter(
     (plan) => plan.status === 'upcoming' || plan.status === 'due',
   ).length
@@ -167,8 +177,8 @@ export function computeAdherence(
     const linePlans = plans.filter((plan) => plan.lineId === line.id)
     const kind: LineKind = line.kind
     return kind === 'oral'
-      ? oralStats(line.id, linePlans)
-      : injectionStats(line.id, linePlans)
+      ? oralStats(line.id, linePlans, now)
+      : injectionStats(line.id, linePlans, now)
   })
 
   const injectionLineIds = new Set(

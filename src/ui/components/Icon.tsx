@@ -18,6 +18,8 @@ export type IconName =
   | 'minus'
   | 'pencil'
   | 'unlock'
+  | 'lock'
+  | 'more'
   | 'syringe'
   | 'smile'
   | 'activity'
@@ -44,6 +46,19 @@ const icons: Record<IconName, IconNode> = {
     <G>
       <Rect x={3} y={11} width={18} height={11} rx={2} />
       <Path d="M7 11V7a5 5 0 0 1 9.9-1" />
+    </G>
+  ),
+  lock: (
+    <G>
+      <Rect x={3} y={11} width={18} height={11} rx={2} />
+      <Path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </G>
+  ),
+  more: (
+    <G>
+      <Circle cx={12} cy={12} r={1} />
+      <Circle cx={19} cy={12} r={1} />
+      <Circle cx={5} cy={12} r={1} />
     </G>
   ),
   syringe: (
