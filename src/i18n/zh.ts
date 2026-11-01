@@ -27,8 +27,32 @@ export const zh = {
   tabs: {
     today: '今天',
     history: '记录',
+    calendar: '日历',
     trends: '趋势',
     settings: '设置',
+  },
+
+  calendar: {
+    title: '日历',
+    hint: '查看未来的注射日程',
+    today: '今天',
+    prevMonth: '上个月',
+    nextMonth: '下个月',
+    weekdays: ['一', '二', '三', '四', '五', '六', '日'],
+    selectedDay: '当天安排',
+    emptyDay: '这天没有注射安排',
+    emptyMonth: '本月没有注射安排',
+    noTreatment: '还没有治疗方案',
+    noInjectionLines: '当前方案没有注射线',
+    countSuffix: '针',
+    phaseLoading: '负荷',
+    phaseMaintenance: '维持',
+    statusDone: '已完成',
+    statusDue: '今天',
+    statusOverdue: '已逾期',
+    statusUpcoming: '计划',
+    statusMissed: '已跳过',
+    legend: '圆点表示当天有注射计划，选中日期可查看药名和剂量。',
   },
 
   common: {

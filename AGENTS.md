@@ -39,7 +39,7 @@ npm run import-template   # 重新生成 Excel 导入模板 tools/import-editor/
 
 ```
 app/                      expo-router 路由
-  (tabs)/                 今天 / 记录 / 趋势 / 设置
+  (tabs)/                 今天 / 记录 / 日历 / 趋势 / 设置
   onboarding/             四步引导：病种(可多选) → 药物 → 方案 → 提醒
   modal/                  注射登记、口服打卡、症状登记（支持 ?id= 编辑）
 src/

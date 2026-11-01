@@ -76,6 +76,8 @@ export interface ScheduleInput {
   now: number
   /** 口服线向前（含今天）覆盖的天数；默认 ORAL_HORIZON_DAYS */
   horizonDays?: number
+  /** 注射线额外覆盖的未来针数；默认 2，日历可以传更大的值 */
+  futureDoseCount?: number
 }
 
 /** 单条线的排程输入 */
@@ -84,6 +86,7 @@ export interface LineScheduleInput {
   logs: DoseLog[]
   now: number
   horizonDays?: number
+  futureDoseCount?: number
   /** 可选：注入宿主线解析器（通常用 resolveHostLine 的结果） */
   resolveHost?: (line: TreatmentLine) => TreatmentLine | null
   /** 可选：宿主线的用药记录（同步线需要，才能对齐宿主真实针日） */
@@ -326,8 +329,10 @@ export function buildInjectionPlans(input: {
   line: TreatmentLine
   logs: DoseLog[]
   now: number
+  futureDoseCount?: number
 }): SchedulePlan[] {
   const { line, logs, now } = input
+  const futureDoseLimit = input.futureDoseCount ?? INJECTION_FUTURE_DOSE_COUNT
 
   if (!isInjectionLine(line)) return []
   assertWindowDays(line.windowDays ?? 0)
@@ -388,7 +393,7 @@ export function buildInjectionPlans(input: {
     // 有记录的未来针（例如补录了提前的注射）仍然保留。
     if (!log && plannedAt > now) {
       futureCount += 1
-      if (futureCount > INJECTION_FUTURE_DOSE_COUNT) break
+      if (futureCount > futureDoseLimit) break
     }
     if (plans.length >= MAX_PLANS) {
       throw new Error('排程长度超出上限，请检查给药间隔')
@@ -427,8 +432,10 @@ function buildSyncedPlans(input: {
   now: number
   /** 任一条线停用后的截止时间；null 表示都仍在用 */
   endAt?: number | null
+  futureDoseCount?: number
 }): SchedulePlan[] {
   const { line, hostPlans, logs, now, endAt = null } = input
+  const futureDoseLimit = input.futureDoseCount ?? INJECTION_FUTURE_DOSE_COUNT
   const ownPhases = [...(line.phases ?? [])].sort((a, b) => a.orderIdx - b.orderIdx)
   for (const phase of ownPhases) assertIntervalDays(phase.intervalDays)
   if (ownPhases.length === 0 || hostPlans.length === 0) return []
@@ -445,7 +452,7 @@ function buildSyncedPlans(input: {
 
   let futureCount = timestamps.filter((timestamp) => timestamp > now).length
   let cursor = timestamps[timestamps.length - 1]
-  while (futureCount < INJECTION_FUTURE_DOSE_COUNT) {
+  while (futureCount < futureDoseLimit) {
     if (timestamps.length >= MAX_PLANS) {
       throw new Error('排程长度超出上限，请检查给药间隔')
     }
@@ -643,7 +650,7 @@ export function buildOralPlans(input: {
 
 /** 单条线的计划（注射线会自动解析宿主线；宿主计划由调用方提供） */
 export function buildLineSchedule(input: LineScheduleInput): SchedulePlan[] {
-  const { line, logs, now, horizonDays } = input
+  const { line, logs, now, horizonDays, futureDoseCount } = input
 
   if (line.kind === 'oral') {
     return buildOralPlans({ line, logs, now, horizonDays })
@@ -652,7 +659,12 @@ export function buildLineSchedule(input: LineScheduleInput): SchedulePlan[] {
   if (isSyncedLine(line)) {
     const host = input.resolveHost ? input.resolveHost(line) : null
     if (!host) return []
-    const hostPlans = buildInjectionPlans({ line: host, logs: input.hostLogs ?? [], now })
+    const hostPlans = buildInjectionPlans({
+      line: host,
+      logs: input.hostLogs ?? [],
+      now,
+      futureDoseCount,
+    })
     if (hostPlans.length === 0) return []
     return buildSyncedPlans({
       line,
@@ -660,15 +672,16 @@ export function buildLineSchedule(input: LineScheduleInput): SchedulePlan[] {
       logs,
       now,
       endAt: earliestEnd(line.endedAt, host.endedAt),
+      futureDoseCount,
     })
   }
 
-  return buildInjectionPlans({ line, logs, now })
+  return buildInjectionPlans({ line, logs, now, futureDoseCount })
 }
 
 /** 按 lines 顺序展开并汇总，按 plannedAt 升序（同一时间保持线的原始顺序） */
 export function buildSchedule(input: ScheduleInput): SchedulePlan[] {
-  const { lines, logs, now, horizonDays } = input
+  const { lines, logs, now, horizonDays, futureDoseCount } = input
 
   const logsByLine = new Map<string, DoseLog[]>()
   for (const line of lines) {
@@ -681,7 +694,12 @@ export function buildSchedule(input: ScheduleInput): SchedulePlan[] {
     if (line.kind === 'injection' && !isSyncedLine(line)) {
       hostPlansById.set(
         line.id,
-        buildInjectionPlans({ line, logs: logsByLine.get(line.id) ?? [], now }),
+        buildInjectionPlans({
+          line,
+          logs: logsByLine.get(line.id) ?? [],
+          now,
+          futureDoseCount,
+        }),
       )
     }
   }
@@ -708,6 +726,7 @@ export function buildSchedule(input: ScheduleInput): SchedulePlan[] {
         logs: lineLogs,
         now,
         endAt: earliestEnd(line.endedAt, host.endedAt),
+        futureDoseCount,
       })) {
         all.push(plan)
       }
@@ -715,7 +734,7 @@ export function buildSchedule(input: ScheduleInput): SchedulePlan[] {
     }
 
     const cached = hostPlansById.get(line.id)
-    const plans = cached ?? buildInjectionPlans({ line, logs: lineLogs, now })
+    const plans = cached ?? buildInjectionPlans({ line, logs: lineLogs, now, futureDoseCount })
     for (const plan of plans) all.push(plan)
   }
 

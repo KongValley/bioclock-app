@@ -83,6 +83,14 @@ export default function TabsLayout() {
           }}
         />
         <Tabs.Screen
+          name="calendar"
+          options={{
+            title: zh.tabs.calendar,
+            tabBarAccessibilityLabel: zh.tabs.calendar,
+            tabBarIcon: ({ color }) => <TabIcon name="calendar" color={color} />,
+          }}
+        />
+        <Tabs.Screen
           name="trends"
           options={{
             title: zh.tabs.trends,

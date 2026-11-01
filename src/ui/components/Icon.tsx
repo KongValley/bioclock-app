@@ -20,6 +20,7 @@ export type IconName =
   | 'unlock'
   | 'lock'
   | 'more'
+  | 'calendar'
   | 'syringe'
   | 'smile'
   | 'activity'
@@ -59,6 +60,12 @@ const icons: Record<IconName, IconNode> = {
       <Circle cx={12} cy={12} r={1} />
       <Circle cx={19} cy={12} r={1} />
       <Circle cx={5} cy={12} r={1} />
+    </G>
+  ),
+  calendar: (
+    <G>
+      <Rect x={3} y={4} width={18} height={18} rx={2} />
+      <Path d="M8 2v4M16 2v4M3 10h18" />
     </G>
   ),
   syringe: (
