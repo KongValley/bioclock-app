@@ -67,7 +67,7 @@ export default function HistoryScreen() {
   const theme = useTheme()
   const router = useRouter()
   const ready = useAppStore((state) => state.ready)
-  const treatment = useAppStore((state) => state.treatment)
+  const treatments = useAppStore((state) => state.treatments)
   const doseLogs = useAppStore((state) => state.doseLogs)
   const symptoms = useAppStore((state) => state.symptoms)
   const medications = useAppStore((state) => state.medications)
@@ -98,9 +98,11 @@ export default function HistoryScreen() {
 
   const lineById = useMemo(() => {
     const map = new Map<string, TreatmentLine>()
-    for (const line of treatment?.lines ?? []) map.set(line.id, line)
+    for (const treatment of treatments) {
+      for (const line of treatment.lines) map.set(line.id, line)
+    }
     return map
-  }, [treatment])
+  }, [treatments])
 
   const doseLogById = useMemo(() => {
     const map = new Map<string, DoseLog>()

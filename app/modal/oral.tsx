@@ -50,7 +50,8 @@ export default function OralModal() {
       : null
 
   const ready = useAppStore((state) => state.ready)
-  const treatment = useAppStore((state) => state.treatment)
+  const activeTreatment = useAppStore((state) => state.treatment)
+  const treatments = useAppStore((state) => state.treatments)
   const medications = useAppStore((state) => state.medications)
   const doseLogs = useAppStore((state) => state.doseLogs)
   const appLockEnabled = useAppStore((state) => state.settings.app_lock === '1')
@@ -58,6 +59,9 @@ export default function OralModal() {
   const addDoseLog = useAppStore((state) => state.addDoseLog)
   const updateDoseLog = useAppStore((state) => state.updateDoseLog)
   const editing = editingId ? doseLogs.find((item) => item.id === editingId) : undefined
+  const treatment = editing
+    ? treatments.find((item) => item.lines.some((line) => line.id === editing.lineId)) ?? null
+    : activeTreatment
 
   const oralLines = useMemo(() => {
     const all = treatment?.lines.filter((item) => item.kind === 'oral') ?? []

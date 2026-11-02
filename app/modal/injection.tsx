@@ -50,7 +50,8 @@ export default function InjectionModal() {
   const paramLineId = firstParam(params.lineId)
 
   const ready = useAppStore((state) => state.ready)
-  const treatment = useAppStore((state) => state.treatment)
+  const activeTreatment = useAppStore((state) => state.treatment)
+  const treatments = useAppStore((state) => state.treatments)
   const medications = useAppStore((state) => state.medications)
   const doseLogs = useAppStore((state) => state.doseLogs)
   const appLockEnabled = useAppStore((state) => state.settings.app_lock === '1')
@@ -59,6 +60,9 @@ export default function InjectionModal() {
   const updateDoseLog = useAppStore((state) => state.updateDoseLog)
 
   const editing = editingId ? doseLogs.find((item) => item.id === editingId) : undefined
+  const treatment = editing
+    ? treatments.find((item) => item.lines.some((line) => line.id === editing.lineId)) ?? null
+    : activeTreatment
 
   const [lineId, setLineId] = useState<string>('')
   const [takenAt, setTakenAt] = useState<number>(() => Date.now())
