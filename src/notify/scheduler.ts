@@ -1,5 +1,6 @@
 import * as Notifications from 'expo-notifications'
 import { Platform } from 'react-native'
+import { zh } from '@/i18n/zh'
 import { doseLogs, medications, reminderRules, settings, treatments } from '@/db/repo'
 import type {
   AppSettings,
@@ -40,17 +41,19 @@ interface ReminderDraft {
   body: string
 }
 
-/**
- * 申请通知权限，并确保 Android 通知渠道存在。
- * exactAlarm 表示系统是否允许精确闹钟；无法可靠检测时返回 false，不抛错。
- */
-export async function ensurePermissions(): Promise<{ granted: boolean; exactAlarm: boolean }> {
+/** 幂等创建通知渠道；恢复备份或冷启动排程时无需重复弹出权限请求。 */
+async function ensureReminderChannel(): Promise<void> {
   if (Platform.OS === 'android') {
     await Notifications.setNotificationChannelAsync(REMINDER_CHANNEL_ID, {
-      name: '用药提醒',
+      name: zh.notify.channelName,
       importance: Notifications.AndroidImportance.HIGH,
     })
   }
+}
+
+/** 申请通知权限；无法可靠检测精确闹钟权限时返回 false。 */
+export async function ensurePermissions(): Promise<{ granted: boolean; exactAlarm: boolean }> {
+  await ensureReminderChannel()
 
   let permission = await Notifications.getPermissionsAsync()
   let granted = isNotificationGranted(permission)
@@ -75,7 +78,7 @@ export async function ensurePermissions(): Promise<{ granted: boolean; exactAlar
  * 清空后按「未来 8 周」重新排程。
  *
  * - 注射线：按 `buildSchedule` 的下一针，用 treatment 级 reminderRules 的偏移（提前 N 天 + 当天）。
- * - 口服线：覆盖未来 14 天的打卡点，每天在 oral.remindTime 提醒；同一天多条口服线合并成一条。
+ * - 口服线：覆盖含当天的 14 天，每天在 oral.remindTime 提醒；同一天同一时间合并。
  *
  * 返回实际写入系统的通知条数（不会超过 60 条）。
  */
@@ -93,10 +96,12 @@ export function rescheduleAll(): Promise<{ scheduled: number }> {
 
 async function runReschedule(generation: number): Promise<{ scheduled: number }> {
   if (generation !== rescheduleGeneration) return { scheduled: 0 }
-  await cancelAll()
 
   const treatment = await treatments.getActive()
-  if (!treatment) return { scheduled: 0 }
+  if (!treatment) {
+    if (generation === rescheduleGeneration) await cancelAll()
+    return { scheduled: 0 }
+  }
 
   const [logs, reminder, appSettings, allMedications] = await Promise.all([
     doseLogs.list(),
@@ -149,6 +154,12 @@ async function runReschedule(generation: number): Promise<{ scheduled: number }>
     (a, b) => a.triggerAt - b.triggerAt || a.plannedAt - b.plannedAt,
   )
 
+  // 读库或计算失败时保留已有提醒；只有新草稿准备好后才替换。
+  // 备份恢复会跳过引导的权限步骤，也必须先建立渠道再排程。
+  if (limited.length > 0) await ensureReminderChannel()
+  if (generation !== rescheduleGeneration) return { scheduled: 0 }
+  await cancelAll()
+
   let failed = 0
   for (const draft of limited) {
     if (generation !== rescheduleGeneration) return { scheduled: 0 }
@@ -188,7 +199,7 @@ function collectPlansThrough(
     lines: treatment.lines,
     logs,
     now,
-    horizonDays,
+    horizonDays: ORAL_HORIZON_DAYS - 1,
     futureDoseCount: futureDoseCountForHorizon(treatment.lines, horizonDays),
   })
 }
@@ -214,7 +225,8 @@ function buildInjectionDrafts(input: {
 
   for (const plan of plans) {
     if (plan.kind !== 'injection') continue
-    if (plan.status === 'done') continue
+    // skipped 的未来计划仍标记 upcoming，必须同时检查是否已有打卡记录。
+    if (plan.doseLogId || plan.status === 'done' || plan.status === 'missed') continue
     if (plan.plannedAt > horizon) continue
 
     const line = lines.get(plan.lineId)
@@ -291,7 +303,7 @@ interface OralDayGroup {
   remindMinutes: number
 }
 
-/** 口服线：按本地日分组，同一天合并成一条通知（取当天最早的提醒时间）。 */
+/** 口服线：按本地日和提醒时间分组，相同时刻的多条线合并提醒。 */
 function buildOralDrafts(input: {
   plans: SchedulePlan[]
   lines: Map<string, TreatmentLine>
@@ -305,7 +317,7 @@ function buildOralDrafts(input: {
 
   for (const plan of plans) {
     if (plan.kind !== 'oral') continue
-    if (plan.status === 'done' || plan.status === 'missed') continue
+    if (plan.doseLogId || plan.status === 'done' || plan.status === 'missed') continue
     if (plan.plannedAt > horizon) continue
 
     const line = lines.get(plan.lineId)
@@ -314,8 +326,7 @@ function buildOralDrafts(input: {
 
     const day = startOfLocalDay(plan.plannedAt)
     const remindMinutes = parseTimeOfDay(line.oral.remindTime, DEFAULT_REMINDER_MINUTES)
-    // 当天提醒时间已经过了就不再补排，避免顺延到次日变成错位提醒。
-    if (atLocalMinutes(day, remindMinutes) <= now) continue
+    // 是否过期在免打扰顺延之后判断，保留今天尚未触发的顺延提醒。
     const key = `${day}|${remindMinutes}`
     const medication = medicationById.get(line.medicationId)
     const name = medication?.name ?? line.label

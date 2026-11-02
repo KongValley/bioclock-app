@@ -9,8 +9,9 @@ import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { initDatabase } from '@/db'
 import { useAppStore } from '@/store/app'
 import { ThemeProvider, useTheme, type ThemeMode } from '@/ui/theme'
-import { ToastHost } from '@/ui/components/Toast'
+import { toast, ToastHost } from '@/ui/components/Toast'
 import { AppLockGate } from '@/ui/components/AppLockGate'
+import { watchForegroundReminders } from '@/notify/lifecycle'
 import { zh } from '@/i18n/zh'
 
 export { useTheme } from '@/ui/theme'
@@ -56,6 +57,10 @@ function RootNavigator() {
   const onboardedAt = useAppStore((state) => state.settings.onboarded_at)
   const pendingResponse = useRef<Notifications.NotificationResponse | null>(null)
   const lastHandled = useRef<{ id: string; at: number } | null>(null)
+
+  useEffect(() => watchForegroundReminders(() => {
+    toast(zh.notify.refreshFailed, 'error')
+  }), [])
 
   // Android 根视图背景跟着主题走，避免切页/回弹时闪白。
   useEffect(() => {

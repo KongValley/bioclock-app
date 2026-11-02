@@ -255,6 +255,17 @@ export const zh = {
     late: '延迟',
   },
 
+  doseStatus: {
+    done: '已用',
+    skipped: '跳过',
+    missed: '漏用',
+  },
+
+  report: {
+    status: '状态',
+    adherenceAllHistory: '依从性统计（全部历史）',
+  },
+
   disclaimer: {
     title: '免责声明',
     short: '本应用仅用于个人记录与提醒，不提供诊断、治疗或用药建议。',
@@ -269,6 +280,8 @@ export const zh = {
   },
 
   notify: {
+    channelName: '用药提醒',
+    refreshFailed: '提醒更新失败，请到设置中检查通知权限并重新保存提醒。',
     prepareHint: '请提前 30 分钟取出冷藏药，回温后再注射。',
     dueToday: '今天该注射了',
     dueTomorrow: '明天该注射了，别忘了提前取出冷藏药',
