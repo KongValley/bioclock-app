@@ -1,6 +1,5 @@
 import {
   medications as medicationRepo,
-  settings as settingsRepo,
   treatments as treatmentRepo,
   type TreatmentLineInput,
 } from '@/db/repo'
@@ -94,7 +93,5 @@ export async function ensureTreatmentFromTransfer(text: string): Promise<boolean
 
   const created = await treatmentRepo.create({ name: template.name, lines })
   await treatmentRepo.setActive(created.id, true)
-  // 新设备恢复后跳过引导。
-  await settingsRepo.set('onboarded_at', String(Date.now()))
   return true
 }

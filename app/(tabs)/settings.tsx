@@ -15,11 +15,11 @@ import {
 import { useRouter } from 'expo-router'
 import Constants from 'expo-constants'
 import * as DocumentPicker from 'expo-document-picker'
-import { readAsStringAsync } from 'expo-file-system/legacy'
 import * as LocalAuthentication from 'expo-local-authentication'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useTheme } from '@/ui/theme'
 import type { ThemeMode } from '@/ui/theme'
+import { readPickedBuffer, readPickedText } from '@/ui/components/file'
 import { zh } from '@/i18n/zh'
 import {
   useAppStore,
@@ -41,7 +41,7 @@ import {
   transferToImportPayload,
 } from '@/export'
 import { previewImport, type ImportResult } from '@/import'
-import { ensureTreatmentFromTransfer } from '@/import/transfer'
+import { restoreTransferBackup } from '@/import/transferRestore'
 import { parseImportJson, type ImportPayload } from '@/import/schema'
 import { parseSpreadsheet } from '@/import/spreadsheet'
 import { DISEASE_GROUPS, diseasesByGroup, resolveDiseaseIds } from '@/data/diseases'
@@ -112,35 +112,6 @@ function oralFrequencyText(oral: {
     .map((day) => WEEKDAY_LABELS[day])
     .join('、')
   return days === '' ? '自定义' : `每周 ${days}`
-}
-
-/**
- * 读取 DocumentPicker 选中的文件。
- *
- * Expo Go 里 expo-file-system 会拒绝读取 DocumentPicker 复制到缓存的文件
- * （Missing 'READ' permission），但 React Native 的 fetch 直接走 Uri 读取，
- * 不受这层权限校验影响；先试 fetch，失败再退回 expo-file-system。
- */
-async function readPickedBuffer(uri: string): Promise<ArrayBuffer> {
-  const response = await fetch(uri)
-  if (!response.ok) throw new Error(`读取文件失败（HTTP ${response.status}）`)
-  return await response.arrayBuffer()
-}
-
-async function readPickedText(uri: string): Promise<string> {
-  try {
-    const response = await fetch(uri)
-    if (!response.ok) throw new Error(`读取文件失败（HTTP ${response.status}）`)
-    return await response.text()
-  } catch (error) {
-    // Expo Go 里 expo-file-system 对 picker 缓存文件的权限判断有问题，
-    // fetch 能读时优先用 fetch；失败再退回 expo-file-system。
-    try {
-      return await readAsStringAsync(uri)
-    } catch {
-      throw error instanceof Error ? error : new Error('读取文件失败')
-    }
-  }
 }
 
 function RowGroup({ children }: { children: ReactNode }) {
@@ -1959,32 +1930,12 @@ export default function SettingsScreen() {
     const transfer = transferPending
     setImporting(true)
     try {
-      if (transfer) {
-        await ensureTreatmentFromTransfer(transfer.text)
-      }
-      const { result, notifyWarning } = await importRecords(payload)
+      const { result, notifyWarning } = transfer
+        ? await restoreTransferBackup(transfer.text)
+        : await importRecords(payload)
       setPendingImport(null)
       setTransferPending(null)
       setImportPreview(null)
-
-      if (transfer) {
-        const safeSettings = { ...transfer.summary.settings }
-        delete safeSettings.app_lock
-        if (!safeSettings.onboarded_at) safeSettings.onboarded_at = String(Date.now())
-        const settingsResult = await updateSettings(safeSettings)
-        const active = useAppStore.getState().treatment
-        const reminder = transfer.summary.reminder
-        if (active && reminder) {
-          await updateReminder({
-            treatmentId: active.id,
-            offsets: reminder.offsets,
-            timeOfDay: reminder.timeOfDay,
-            snoozeMinutes: reminder.snoozeMinutes,
-            enabled: reminder.enabled,
-          })
-        }
-        if (settingsResult.notifyWarning) toast(settingsResult.notifyWarning, 'error')
-      }
 
       const parts: string[] = []
       if (result.injections > 0) parts.push(`${result.injections} 条注射`)
@@ -2520,7 +2471,7 @@ export default function SettingsScreen() {
           />
           <SettingRow
             label={zh.settings.exportCsv}
-            hint="全部注射与症状原始数据"
+            hint="全部注射记录；症状请用 Excel 或 PDF 导出"
             value={exportingCsv ? '导出中…' : undefined}
             onPress={
               exportingCsv

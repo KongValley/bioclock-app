@@ -12,9 +12,11 @@ import {
   View,
 } from 'react-native'
 import { useRouter } from 'expo-router'
+import * as DocumentPicker from 'expo-document-picker'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useTheme } from '@/ui/theme'
 import { zh } from '@/i18n/zh'
+import { buildPhasePreview } from '@/domain/preview'
 import { DISEASE_DISCLAIMER, DISEASE_GROUPS, diseasesByGroup } from '@/data/diseases'
 import {
   DRUGS_BY_KEY,
@@ -30,11 +32,13 @@ import {
   treatments as treatmentRepo,
 } from '@/db/repo'
 import { rescheduleAll, ensurePermissions } from '@/notify/scheduler'
+import { restoreTransferBackup } from '@/import/transferRestore'
 import { useAppStore, errorMessage } from '@/store/app'
 import type { Disease, MedicationRoute, PhaseKind, RegimenPhaseTemplate } from '@/types'
 import { Button } from '@/ui/components/Button'
 import { Card } from '@/ui/components/Card'
 import { Chip } from '@/ui/components/Chip'
+import { readPickedText } from '@/ui/components/file'
 import { TextField } from '@/ui/components/Field'
 import { SegmentedControl } from '@/ui/components/SegmentedControl'
 import { Stepper } from '@/ui/components/Stepper'
@@ -51,14 +55,6 @@ interface EditablePhase {
   kind: PhaseKind
   intervalDays: number
   repeatCount: number
-  doseText: string
-  unit: string
-}
-
-interface PreviewDose {
-  index: number
-  dayOffset: number
-  kind: PhaseKind
   doseText: string
   unit: string
 }
@@ -93,35 +89,20 @@ function toEditablePhases(
   }))
 }
 
-function buildPreview(phases: EditablePhase[], max: number = 5): PreviewDose[] {
-  if (phases.length === 0) return []
-  const result: PreviewDose[] = [
-    {
-      index: 0,
-      dayOffset: 0,
-      kind: phases[0].kind,
-      doseText: phases[0].doseText,
-      unit: phases[0].unit,
-    },
-  ]
-  let dayOffset = 0
-  let guard = 0
-  for (const phase of phases) {
-    const repeats = phase.repeatCount === 0 ? max : phase.repeatCount
-    for (let i = 0; i < repeats && result.length < max; i += 1) {
-      dayOffset += Math.max(1, phase.intervalDays)
-      result.push({
-        index: result.length,
-        dayOffset,
+function buildPreview(phases: EditablePhase[], max: number = 5) {
+  return buildPhasePreview(
+    phases.map((phase) => {
+      const dose = phase.doseText.trim() === '' ? null : Number(phase.doseText.trim())
+      return {
         kind: phase.kind,
-        doseText: phase.doseText,
+        intervalDays: phase.intervalDays,
+        repeatCount: phase.repeatCount,
+        dose: dose !== null && Number.isFinite(dose) ? dose : null,
         unit: phase.unit,
-      })
-    }
-    guard += 1
-    if (result.length >= max || guard > 60) break
-  }
-  return result
+      }
+    }),
+    max,
+  )
 }
 
 function phaseLabel(kind: PhaseKind): string {
@@ -168,6 +149,7 @@ export default function OnboardingScreen() {
   const [checkingPermission, setCheckingPermission] = useState(false)
   const [finishing, setFinishing] = useState(false)
   const [finishError, setFinishError] = useState<string | null>(null)
+  const [restoring, setRestoring] = useState(false)
 
   const entries = useMemo(() => drugsForDiseases(diseaseIds), [diseaseIds])
   const selectedEntry = useMemo(
@@ -382,6 +364,31 @@ export default function OnboardingScreen() {
       })
   }
 
+  const restoreFromBackup = async () => {
+    setRestoring(true)
+    try {
+      const picked = await DocumentPicker.getDocumentAsync({
+        type: '*/*',
+        copyToCacheDirectory: true,
+        multiple: false,
+      })
+      if (picked.canceled) return
+      const asset = picked.assets?.[0]
+      if (!asset) return
+      const text = await readPickedText(asset.uri)
+      const outcome = await restoreTransferBackup(text)
+      const restored =
+        outcome.result.injections + outcome.result.oralLogs + outcome.result.symptoms
+      toast(restored > 0 ? `已从备份恢复 ${restored} 条记录` : '已从备份恢复', 'success')
+      if (outcome.notifyWarning) toast(outcome.notifyWarning, 'error')
+      router.replace('/')
+    } catch (error) {
+      toast(errorMessage(error), 'error')
+    } finally {
+      setRestoring(false)
+    }
+  }
+
   const finish = async () => {
     setFinishError(null)
     if (diseaseIds.length === 0 || !drugKey) {
@@ -594,6 +601,37 @@ export default function OnboardingScreen() {
       }}
       ListHeaderComponent={
         <View style={{ gap: theme.spacing.md, paddingBottom: theme.spacing.xs }}>
+          <Card tone="primary">
+            <Text
+              style={{
+                color: theme.colors.primary,
+                fontSize: theme.fontSize.sm,
+                fontWeight: '700',
+              }}
+            >
+              {zh.onboarding.restoreTitle}
+            </Text>
+            <Text
+              style={{
+                color: theme.colors.textSecondary,
+                fontSize: theme.fontSize.xs,
+                lineHeight: theme.lineHeight.xs,
+                marginTop: theme.spacing.xs,
+              }}
+            >
+              {zh.onboarding.restoreHint}
+            </Text>
+            <Button
+              label={zh.onboarding.restoreAction}
+              onPress={() => {
+                void restoreFromBackup()
+              }}
+              variant="secondary"
+              loading={restoring}
+              disabled={finishing}
+              style={{ marginTop: theme.spacing.sm }}
+            />
+          </Card>
           <TextField
             value={query}
             onChangeText={setQuery}
@@ -1149,7 +1187,7 @@ export default function OnboardingScreen() {
               {dose.index === 0
                 ? `第 1 针：首针（${phaseLabel(dose.kind)}）`
                 : `第 ${dose.index + 1} 针：首针后 ${dose.dayOffset} 天（${phaseLabel(dose.kind)}）`}
-              {dose.doseText ? ` · ${dose.doseText} ${dose.unit}` : ''}
+              {dose.dose !== null ? ` · ${dose.dose} ${dose.unit}` : ''}
             </Text>
           ))}
           {preview.length >= 5 ? (

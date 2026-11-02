@@ -11,10 +11,11 @@ import {
 } from '@/db/repo'
 import type { DoseLog, Medication, SymptomLog, TreatmentLine } from '@/types'
 import { findMedicationByName, normalizeMedicationName } from '@/domain/medication'
+import { IMPORT_FORMAT, IMPORT_MAX_ROWS, resolveImportLogTime } from './schema'
 import type { ImportInjection, ImportMedication, ImportOralLog, ImportPayload } from './schema'
 
 /**
- * 把解析好的导入数据写进数据库（v2）。
+ * 把解析好的导入数据写进数据库（v3）。
  *
  * - 先合并药物：能按名字/别名匹配到已有药就只补空字段并合并商品名；匹配不到就建自定义药。
  * - 注射/口服记录会对应到当前治疗方案里“同一种药”的用药线；
@@ -365,7 +366,7 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
   const existingLogKeys = new Set(allLogs.map((log) => `${minuteKey(logTimeOf(log))}|${log.lineId}`))
   const existingLogIdByTime = new Map<number, string>()
   for (const log of allLogs) {
-    if (log.takenAt !== null) existingLogIdByTime.set(minuteKey(log.takenAt), log.id)
+    existingLogIdByTime.set(minuteKey(logTimeOf(log)), log.id)
   }
 
   const pendingLogs: PendingDoseLog[] = []
@@ -380,7 +381,12 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
       skippedNoLine += 1
       continue
     }
-    const key = `${minuteKey(row.injectedAt)}|${
+    const storedAt = resolveImportLogTime({
+      status: row.status,
+      eventAt: row.injectedAt,
+      scheduledAt: row.scheduledAt,
+    })
+    const key = `${minuteKey(storedAt)}|${
       resolved.lineKey.startsWith('existing:') ? resolved.lineKey.slice('existing:'.length) : resolved.lineKey
     }`
     if (existingLogKeys.has(key)) {
@@ -390,12 +396,13 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
     existingLogKeys.add(key)
 
     pendingLogs.push({
-      time: row.injectedAt,
+      time: storedAt,
       lineKey: resolved.lineKey,
       input: {
         lineId: resolved.lineKey,
-        scheduledAt: null,
-        takenAt: row.injectedAt,
+        scheduledAt:
+          row.scheduledAt ?? (row.status === 'done' ? null : row.injectedAt),
+        takenAt: row.status === 'done' ? row.injectedAt : null,
         status: row.status,
         dose: row.dose,
         unit: row.unit ?? resolved.medication?.unit ?? 'mg',
@@ -413,7 +420,12 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
       skippedNoLine += 1
       continue
     }
-    const key = `${minuteKey(row.takenAt)}|${
+    const storedAt = resolveImportLogTime({
+      status: row.status,
+      eventAt: row.takenAt,
+      scheduledAt: row.scheduledAt,
+    })
+    const key = `${minuteKey(storedAt)}|${
       resolved.lineKey.startsWith('existing:') ? resolved.lineKey.slice('existing:'.length) : resolved.lineKey
     }`
     if (existingLogKeys.has(key)) {
@@ -423,12 +435,12 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
     existingLogKeys.add(key)
 
     pendingLogs.push({
-      time: row.takenAt,
+      time: storedAt,
       lineKey: resolved.lineKey,
       input: {
         lineId: resolved.lineKey,
-        scheduledAt: null,
-        takenAt: row.takenAt,
+        scheduledAt: row.scheduledAt ?? (row.status === 'done' ? null : row.takenAt),
+        takenAt: row.status === 'done' ? row.takenAt : null,
         status: row.status,
         dose: row.dose,
         unit: row.unit ?? resolved.medication?.unit ?? null,
@@ -464,6 +476,13 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
       tagSet.add(normalized)
       tags += 1
     }
+  }
+  // 换机快照会带上未被任何症状引用的自定义标签，也要计入并恢复。
+  for (const name of payload.symptomTags ?? []) {
+    const normalized = name.toLowerCase()
+    if (tagSet.has(normalized)) continue
+    tagSet.add(normalized)
+    tags += 1
   }
 
   if (!dryRun) {
@@ -535,6 +554,9 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
       for (const tag of row.tags) {
         await symptomTagRepo.ensure(tag)
       }
+    }
+    for (const name of payload.symptomTags ?? []) {
+      await symptomTagRepo.ensure(name)
     }
 
     if (payload.lineStates.length > 0 || payload.efficacyEvents.length > 0) {

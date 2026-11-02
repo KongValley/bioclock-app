@@ -163,7 +163,8 @@ export const zh = {
     exportPdf: '导出 PDF 就诊报告',
     clearData: '清空全部数据',
     clearDataTitle: '清空全部数据？',
-    clearDataMessage: '所有注射、症状和方案都会被删除，且无法恢复。内置药物会保留。',
+    clearDataMessage:
+      '注射、口服打卡、症状、疗效记录、提醒、方案和自定义药物都会被删除，且无法恢复。内置药物会保留。',
     aboutSection: '关于',
     disclaimer: '免责声明',
     version: '版本',
@@ -186,6 +187,9 @@ export const zh = {
     loadingDoseHint: '例如第 0、1、2 周各一次，之后每 12 周维持',
     reminderTitle: '设置提醒时间',
     reminderHint: '到点前会发一条本地通知，不会联网。',
+    restoreTitle: '已经换手机？',
+    restoreHint: '选择旧手机导出的 BioClock 换机备份（.json），会恢复方案、提醒和全部记录。',
+    restoreAction: '从备份恢复',
     finish: '完成',
   },
 

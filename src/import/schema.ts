@@ -14,11 +14,13 @@ import { SITE_LABELS } from '@/domain/rotation'
  * 文件是 UTF-8 JSON，结构见 docs/import-format.md：
  * {
  *   "format": "bioclock-import",
- *   "version": 2,
+ *   "version": 3,
  *   "medications": [...],
  *   "injections": [...],
  *   "symptoms": [...],
- *   "oralLogs": [...]
+ *   "oralLogs": [...],
+ *   "lineStates": [...],
+ *   "efficacyEvents": [...]
  * }
  *
  * v1 仍然接受（v1 没有 medications / oralLogs 段，注射记录也没有 status / lineLabel）。
@@ -39,11 +41,14 @@ export interface ImportMedication {
 
 export interface ImportInjection {
   injectedAt: number
+  /** 换机快照保留的计划时间；普通 v3 导入为空 */
+  scheduledAt?: number | null
   /** 药名，留空表示使用当前治疗方案的宿主注射线 */
   medicationName: string | null
   dose: number | null
   unit: string | null
-  site: InjectionSite
+  /** 静脉输注没有注射部位，换机快照可能为 null */
+  site: InjectionSite | null
   lotNumber: string | null
   note: string | null
   status: DoseStatus
@@ -53,6 +58,8 @@ export interface ImportInjection {
 
 export interface ImportOralLog {
   takenAt: number
+  /** 换机快照保留的计划时间；普通 v3 导入为空 */
+  scheduledAt?: number | null
   medicationName: string | null
   status: DoseStatus
   dose: number | null
@@ -96,6 +103,8 @@ export interface ImportPayload {
   symptoms: ImportSymptom[]
   lineStates: ImportLineState[]
   efficacyEvents: ImportEfficacyEvent[]
+  /** 换机快照里未被症状引用的自定义标签，也要恢复 */
+  symptomTags?: string[]
   /** 换机恢复：允许把历史记录挂到已停用的用药线上，避免重复建线 */
   preserveEndedLines?: boolean
 }
@@ -105,6 +114,22 @@ export const IMPORT_VERSION = 3
 /** 仍然接受的最老版本 */
 export const IMPORT_MIN_VERSION = 1
 export const IMPORT_MAX_ROWS = 2000
+
+/**
+ * 导入记录最终用于落库/去重的时间。
+ *
+ * done 用实际执行时间；skipped/missed 用计划时间（没有计划时间才退回事件时间）。
+ * 换机快照里的跳过记录可能同时带 scheduledAt 和 takenAt，两个时间不能混用，
+ * 否则同一份文件重复导入会多出一条。
+ */
+export function resolveImportLogTime(input: {
+  status: DoseStatus
+  eventAt: number
+  scheduledAt?: number | null
+}): number {
+  if (input.status === 'done') return input.eventAt
+  return input.scheduledAt ?? input.eventAt
+}
 
 const SITE_ALIASES: Record<string, InjectionSite> = Object.fromEntries(
   (Object.keys(SITE_LABELS) as InjectionSite[]).flatMap((site) => [

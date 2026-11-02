@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseImportJson, parseLocalDateTime } from '../schema'
+import { parseImportJson, parseLocalDateTime, resolveImportLogTime } from '../schema'
 
 const fileV2 = {
   format: 'bioclock-import',
@@ -205,5 +205,41 @@ describe('导入文件解析（v2）', () => {
     expect(payload.efficacyEvents[0].occurredAt).toBe(
       parseLocalDateTime('2026-03-02 09:00', '时间'),
     )
+  })
+})
+
+describe('resolveImportLogTime', () => {
+  it('done 用实际执行时间，忽略计划时间', () => {
+    expect(
+      resolveImportLogTime({
+        status: 'done',
+        eventAt: 1_000,
+        scheduledAt: 2_000,
+      }),
+    ).toBe(1_000)
+  })
+
+  it('skipped / missed 用计划时间，保证重复导入去重键一致', () => {
+    expect(
+      resolveImportLogTime({
+        status: 'skipped',
+        eventAt: 1_000,
+        scheduledAt: 2_000,
+      }),
+    ).toBe(2_000)
+    expect(
+      resolveImportLogTime({
+        status: 'missed',
+        eventAt: 1_000,
+        scheduledAt: 2_000,
+      }),
+    ).toBe(2_000)
+  })
+
+  it('没有计划时间时退回事件时间', () => {
+    expect(
+      resolveImportLogTime({ status: 'skipped', eventAt: 1_000, scheduledAt: null }),
+    ).toBe(1_000)
+    expect(resolveImportLogTime({ status: 'missed', eventAt: 1_000 })).toBe(1_000)
   })
 })

@@ -1,4 +1,6 @@
 import type { InjectionSite, MedicationRoute } from '@/types'
+import { SCHEMA_VERSION } from '@/db/schema'
+import { resolveImportLogTime } from '@/import/schema'
 import type {
   ImportEfficacyEvent,
   ImportInjection,
@@ -160,6 +162,39 @@ function readTransferFile(text: string): TransferFile {
   if (parsed.version !== TRANSFER_VERSION) {
     throw new Error(`不支持的换机文件版本：${String(parsed.version)}`)
   }
+  if (
+    typeof parsed.schemaVersion !== 'number' ||
+    !Number.isFinite(parsed.schemaVersion)
+  ) {
+    throw new Error('换机文件缺少数据库版本')
+  }
+  if (parsed.schemaVersion > SCHEMA_VERSION) {
+    throw new Error(
+      `备份来自更新版本的 BioClock（数据库 v${parsed.schemaVersion}），请先升级 App 再导入`,
+    )
+  }
+
+  const arrays: Array<[keyof TransferFile, string]> = [
+    ['medications', '药物'],
+    ['treatments', '治疗方案'],
+    ['doseLogs', '打卡记录'],
+    ['symptoms', '症状记录'],
+    ['efficacyEvents', '疗效记录'],
+    ['symptomTags', '症状标签'],
+    ['reminders', '提醒规则'],
+  ]
+  for (const [field, label] of arrays) {
+    if (!Array.isArray(parsed[field])) {
+      throw new Error(`换机文件缺少${label}`)
+    }
+  }
+  if (
+    typeof parsed.settings !== 'object' ||
+    parsed.settings === null ||
+    Array.isArray(parsed.settings)
+  ) {
+    parsed.settings = {}
+  }
   return parsed
 }
 
@@ -187,17 +222,30 @@ export function transferToImportPayload(text: string): ImportPayload {
     }
   }
 
+  // 跳过/漏用可能没有 takenAt。落库时间与 import 的去重时间必须同源：
+  // done 用实际时间，skipped/missed 用计划时间（没有计划时间才退回事件时间）。
+  const eventTime = (dose: TransferDose): number =>
+    dose.takenAt ?? dose.scheduledAt ?? dose.createdAt
+  const storedTime = (dose: TransferDose): number =>
+    resolveImportLogTime({
+      status: dose.status as ImportInjection['status'],
+      eventAt: eventTime(dose),
+      scheduledAt: dose.scheduledAt,
+    })
+
   const injections: ImportInjection[] = parsed.doseLogs
-    .filter((dose) => lineById.get(dose.lineId)?.kind === 'injection' && dose.takenAt !== null)
+    .filter((dose) => lineById.get(dose.lineId)?.kind === 'injection')
     .map((dose) => {
       const line = lineById.get(dose.lineId)
       const medication = line ? medicationById.get(line.medicationId) : undefined
       return {
-        injectedAt: dose.takenAt as number,
+        injectedAt: storedTime(dose),
+        scheduledAt:
+          dose.scheduledAt ?? (dose.status === 'done' ? null : eventTime(dose)),
         medicationName: medication?.name ?? line?.label ?? null,
         dose: dose.dose,
         unit: dose.unit,
-        site: (dose.site ?? 'abdomen_ul') as InjectionSite,
+        site: (dose.site ?? null) as InjectionSite | null,
         lotNumber: dose.lotNumber,
         note: dose.note,
         status: dose.status as ImportInjection['status'],
@@ -206,12 +254,14 @@ export function transferToImportPayload(text: string): ImportPayload {
     })
 
   const oralLogs: ImportOralLog[] = parsed.doseLogs
-    .filter((dose) => lineById.get(dose.lineId)?.kind === 'oral' && dose.takenAt !== null)
+    .filter((dose) => lineById.get(dose.lineId)?.kind === 'oral')
     .map((dose) => {
       const line = lineById.get(dose.lineId)
       const medication = line ? medicationById.get(line.medicationId) : undefined
       return {
-        takenAt: dose.takenAt as number,
+        takenAt: storedTime(dose),
+        scheduledAt:
+          dose.scheduledAt ?? (dose.status === 'done' ? null : eventTime(dose)),
         medicationName: medication?.name ?? line?.label ?? null,
         status: dose.status as ImportOralLog['status'],
         dose: dose.dose,
@@ -253,7 +303,10 @@ export function transferToImportPayload(text: string): ImportPayload {
     injectionAt:
       symptom.doseIndex === null
         ? null
-        : parsed.doseLogs[symptom.doseIndex]?.takenAt ?? null,
+        : (() => {
+            const linked = parsed.doseLogs[symptom.doseIndex]
+            return linked ? storedTime(linked) : null
+          })(),
   }))
 
   return {
@@ -272,6 +325,7 @@ export function transferToImportPayload(text: string): ImportPayload {
     symptoms,
     lineStates,
     efficacyEvents,
+    symptomTags: parsed.symptomTags.map((tag) => tag.name),
     preserveEndedLines: true,
   }
 }
