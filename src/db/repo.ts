@@ -1033,10 +1033,11 @@ export const treatments = {
       const medicationId = requireNonEmptyString(lineInput?.medicationId, '药物 ID')
       await requireMedicationExists(db, medicationId)
       const normalized = normalizeLine(treatmentId, lineInput)
-      if (lineIds.has(normalized.row.medication_id)) {
+      const lineKey = `${normalized.row.kind}:${normalized.row.medication_id}`
+      if (lineIds.has(lineKey)) {
         fail('同一个治疗方案里不能重复添加同一种药')
       }
-      lineIds.add(normalized.row.medication_id)
+      lineIds.add(lineKey)
       lines.push(normalized)
     }
 
@@ -1320,6 +1321,16 @@ export const treatments = {
 
     const finalHosts = [...finalLines.values()].filter((line) => line.isHost)
     if (finalHosts.length > 1) fail('一个治疗方案只能有一个主药')
+
+    // 修改已有线的 medicationId 也要查重，否则可以把两条同途径的线改成同一种药。
+    const usedLineKeys = new Set<string>()
+    for (const line of finalLines.values()) {
+      const lineKey = `${line.kind}:${line.medicationId}`
+      if (usedLineKeys.has(lineKey)) {
+        fail('同一个治疗方案里不能重复添加同一种药')
+      }
+      usedLineKeys.add(lineKey)
+    }
 
     const clearHosts =
       newHosts.length > 0 || normalizedAdds.some((line) => line.row.is_host === 1)
