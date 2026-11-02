@@ -4,6 +4,7 @@ import type { DoseLog, TreatmentLine } from '@/types'
 import { buildSchedule } from '@/domain/schedule'
 import type { SchedulePlan } from '@/domain/schedule'
 import { SITE_LABELS } from '@/domain/rotation'
+import { zh } from '@/i18n/zh'
 
 const CSV_HEADERS = [
   '注射日期时间',
@@ -16,6 +17,7 @@ const CSV_HEADERS = [
   '备注',
   '计划时间',
   '偏差天数',
+  zh.report.status,
 ]
 
 /**
@@ -60,6 +62,7 @@ export async function exportCsv(): Promise<{ path: string; filename: string }> {
       log.note ?? '',
       plan ? formatLocalDateTime(plan.plannedAt) : '',
       plan && plan.deviationDays !== undefined ? plan.deviationDays.toFixed(1) : '',
+      zh.doseStatus[log.status],
     ])
   }
 

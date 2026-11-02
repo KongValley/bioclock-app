@@ -5,6 +5,8 @@ import type { DoseLog, LineKind, Medication, SymptomLog, TreatmentLine } from '@
 import { computeAdherence } from '@/domain/adherence'
 import type { AdherenceStats } from '@/domain/adherence'
 import { SITE_LABELS } from '@/domain/rotation'
+import { zh } from '@/i18n/zh'
+import { readPickedBuffer } from '@/ui/components/file'
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const DEFAULT_RANGE_DAYS = 180
@@ -86,10 +88,13 @@ export async function exportPdf(
   })
 
   const printed = await printToFileAsync({ html, width: 595, height: 842 })
+  // expo-print 的临时目录在 Expo Go 的 File 权限范围外，用本地 URI 读取后再写入。
+  const bytes = await readPickedBuffer(printed.uri)
   const filename = `bioclock-${formatLocalDate(now)}.pdf`
   const target = new File(Paths.cache, filename)
   if (target.exists) target.delete()
-  await new File(printed.uri).move(target)
+  target.create({ overwrite: true })
+  target.write(new Uint8Array(bytes))
 
   return { path: target.uri, filename }
 }
@@ -204,7 +209,7 @@ function buildHtml(input: {
 
   const injectionRows =
     reportLogs.length === 0
-      ? '<tr><td class="empty" colspan="7">该时间范围内暂无注射记录</td></tr>'
+      ? '<tr><td class="empty" colspan="8">该时间范围内暂无注射记录</td></tr>'
       : reportLogs
           .map((log) => {
             const line = lineById.get(log.lineId)
@@ -213,6 +218,7 @@ function buildHtml(input: {
             const site = isInfusion ? '—' : log.site ? SITE_LABELS[log.site] ?? '—' : '—'
             return `<tr>
               <td class="nowrap">${escapeHtml(formatLocalDateTime(logTime(log)))}</td>
+              <td>${zh.doseStatus[log.status]}</td>
               <td>${escapeHtml(medication?.name ?? line?.label ?? '—')}</td>
               <td>${escapeHtml(medication?.genericName ?? '—')}</td>
               <td class="nowrap">${escapeHtml(formatDose(log, medication))}</td>
@@ -346,17 +352,19 @@ function buildHtml(input: {
     <h2>注射记录</h2>
     <table>
       <colgroup>
-        <col style="width: 20%" />
-        <col style="width: 14%" />
-        <col style="width: 14%" />
+        <col style="width: 19%" />
+        <col style="width: 7%" />
+        <col style="width: 13%" />
+        <col style="width: 13%" />
         <col style="width: 11%" />
-        <col style="width: 12%" />
-        <col style="width: 12%" />
+        <col style="width: 10%" />
+        <col style="width: 10%" />
         <col style="width: 17%" />
       </colgroup>
       <thead>
         <tr>
           <th>日期时间</th>
+          <th>${zh.report.status}</th>
           <th>药名</th>
           <th>通用名</th>
           <th>剂量</th>
@@ -381,7 +389,7 @@ function buildHtml(input: {
   </section>
 
   <section>
-    <h2>依从性统计</h2>
+    <h2>${zh.report.adherenceAllHistory}</h2>
     <div class="stats">
       <div class="stat"><span class="stat-label">已记录</span><span class="stat-value">${adherence.total}</span></div>
       <div class="stat"><span class="stat-label">按时</span><span class="stat-value">${adherence.onTime}</span></div>
