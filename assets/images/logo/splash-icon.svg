@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs>
+    <linearGradient id="drop" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#E6F6F4"/>
+    </linearGradient>
+  </defs>
+  <!-- 启动图只要水滴 + 对勾，透明底（缩到约 62%，避免被 splash 容器裁掉） -->
+  <g transform="translate(60 60) scale(0.62) translate(-60 -60)">
+    <path d="M60 17 C60 17 30 51 30 71 A30 30 0 0 0 90 71 C90 51 60 17 60 17 Z" fill="url(#drop)"/>
+    <polyline points="47,71 56,80 74,61" fill="none" stroke="#2A8A82" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

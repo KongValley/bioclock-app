@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <!-- Android 13+ 主题图标单色层：水滴剪影，对勾掏空成负形 -->
+  <g transform="translate(60 60) scale(0.8) translate(-60 -60)">
+    <path d="M60 17 C60 17 30 51 30 71 A30 30 0 0 0 90 71 C90 51 60 17 60 17 Z" fill="#000000"/>
+    <polyline points="47,71 56,80 74,61" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>
