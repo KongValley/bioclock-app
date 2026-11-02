@@ -2,6 +2,47 @@ import { describe, expect, it } from 'vitest'
 
 import { CATALOG_DRUGS, DISEASE_DRUGS, DRUGS_BY_KEY, drugsForDisease } from '../catalog'
 import { DISEASES } from '../diseases'
+import { buildInjectionPlans } from '@/domain/schedule'
+import type { TreatmentLine, TreatmentPhase } from '@/types'
+
+const T0 = Date.UTC(2026, 0, 5)
+const DAY = 86_400_000
+
+/** 按目录模板实际跑一遍排程，返回前 count 针的计划日偏移与剂量。 */
+function plannedDoses(entry: (typeof DISEASE_DRUGS)[number], count = 4) {
+  const phases: TreatmentPhase[] = entry.regimen.phases.map((phase, index) => ({
+    ...phase,
+    id: `phase-${index}`,
+    lineId: 'line-template',
+    orderIdx: index,
+    effectiveFrom: null,
+  }))
+  const line: TreatmentLine = {
+    id: 'line-template',
+    treatmentId: 'treatment-template',
+    medicationId: 'med-template',
+    kind: 'injection',
+    label: entry.regimen.name,
+    isHost: true,
+    syncWithHost: false,
+    anchor: 'planned',
+    windowDays: entry.regimen.windowDays,
+    endedAt: null,
+    phases,
+    oral: null,
+  }
+  const plans = buildInjectionPlans({
+    line,
+    logs: [],
+    now: T0,
+    futureDoseCount: count + 2,
+  }).slice(0, count)
+  const base = plans[0]?.plannedAt ?? T0
+  return plans.map((plan) => ({
+    day: Math.round((plan.plannedAt - base) / DAY),
+    dose: plan.dose,
+  }))
+}
 
 /**
  * 药物目录的完整性约束。
@@ -89,6 +130,155 @@ describe('药物目录完整性', () => {
       const drug = DRUGS_BY_KEY[key]
       expect(drug?.unit).toBe('mg/kg')
       expect(drug?.route).toBe('iv')
+    }
+  })
+
+  it('0/2/6 周诱导的方案模板按第 2、4 周间隔排程', () => {
+    const entries = DISEASE_DRUGS.filter((entry) =>
+      /第 0、2、6 周/.test(entry.doseNote ?? ''),
+    )
+    expect(entries.length).toBeGreaterThan(0)
+    for (const entry of entries) {
+      const doses = plannedDoses(entry, 4)
+      expect(
+        doses.map((item) => item.day),
+        `${entry.diseaseId}/${entry.drugKey} 的 0/2/6 周诱导排程不对`,
+      ).toEqual([0, 14, 42, 98])
+    }
+  })
+
+  it('赛妥珠单抗 0/2/4 周三次负荷后才是 200mg 维持', () => {
+    const entries = DISEASE_DRUGS.filter((entry) =>
+      /第 0、2、4 周各 400mg/.test(entry.doseNote ?? ''),
+    )
+    expect(entries.length).toBeGreaterThan(0)
+    for (const entry of entries) {
+      const doses = plannedDoses(entry, 4)
+      expect(
+        doses,
+        `${entry.diseaseId}/${entry.drugKey} 的负荷剂量排程不对`,
+      ).toEqual([
+        { day: 0, dose: 400 },
+        { day: 14, dose: 400 },
+        { day: 28, dose: 400 },
+        { day: 42, dose: 200 },
+      ])
+    }
+  })
+
+  it('0/4 周两次负荷后按维持间隔排程', () => {
+    const cases: Array<{
+      pattern: RegExp
+      label: string
+      expected: Array<{ day: number; dose: number }>
+    }> = [
+      {
+        pattern: /第 0、4 周各 100mg/,
+        label: '古塞奇尤单抗',
+        expected: [
+          { day: 0, dose: 100 },
+          { day: 28, dose: 100 },
+          { day: 84, dose: 100 },
+          { day: 140, dose: 100 },
+        ],
+      },
+      {
+        pattern: /第 0、4 周各 150mg/,
+        label: '瑞莎珠单抗',
+        expected: [
+          { day: 0, dose: 150 },
+          { day: 28, dose: 150 },
+          { day: 112, dose: 150 },
+          { day: 196, dose: 150 },
+        ],
+      },
+      {
+        pattern: /第 0、4 周各一次，之后每 12 周/,
+        label: '乌司奴单抗',
+        expected: [
+          { day: 0, dose: 45 },
+          { day: 28, dose: 45 },
+          { day: 112, dose: 45 },
+          { day: 196, dose: 45 },
+        ],
+      },
+    ]
+
+    for (const item of cases) {
+      const entries = DISEASE_DRUGS.filter((entry) =>
+        item.pattern.test(entry.doseNote ?? ''),
+      )
+      expect(entries.length, `${item.label} 没有匹配的模板`).toBeGreaterThan(0)
+      for (const entry of entries) {
+        expect(
+          plannedDoses(entry, 4),
+          `${entry.diseaseId}/${entry.drugKey} 的 0/4 周负荷排程不对`,
+        ).toEqual(item.expected)
+      }
+    }
+  })
+
+  it('三次负荷后隔更久才进入维持', () => {
+    const benralizumab = DISEASE_DRUGS.filter((entry) =>
+      /前 3 次每 4 周 30mg/.test(entry.doseNote ?? ''),
+    )
+    expect(benralizumab.length).toBeGreaterThan(0)
+    for (const entry of benralizumab) {
+      expect(plannedDoses(entry, 4).map((item) => item.day)).toEqual([0, 28, 56, 112])
+    }
+
+    const risankizumab = DISEASE_DRUGS.filter((entry) =>
+      /静脉 600mg 第 0、4、8 周/.test(entry.doseNote ?? ''),
+    )
+    expect(risankizumab.length).toBeGreaterThan(0)
+    for (const entry of risankizumab) {
+      expect(plannedDoses(entry, 4), '瑞莎珠单抗第 8 周仍应是 600mg 静脉').toEqual([
+        { day: 0, dose: 600 },
+        { day: 28, dose: 600 },
+        { day: 56, dose: 600 },
+        { day: 112, dose: 180 },
+      ])
+    }
+  })
+
+  it('每周诱导结束后再按 4 周间隔维持', () => {
+    const secukinumab300 = DISEASE_DRUGS.filter((entry) =>
+      /第 0–4 周每周 300mg/.test(entry.doseNote ?? ''),
+    )
+    expect(secukinumab300.length).toBeGreaterThan(0)
+    for (const entry of secukinumab300) {
+      expect(plannedDoses(entry, 6)).toEqual([
+        { day: 0, dose: 300 },
+        { day: 7, dose: 300 },
+        { day: 14, dose: 300 },
+        { day: 21, dose: 300 },
+        { day: 28, dose: 300 },
+        { day: 56, dose: 300 },
+      ])
+    }
+
+    const secukinumab150 = DISEASE_DRUGS.filter((entry) =>
+      /第 0–4 周每周 150mg/.test(entry.doseNote ?? ''),
+    )
+    expect(secukinumab150.length).toBeGreaterThan(0)
+    for (const entry of secukinumab150) {
+      expect(plannedDoses(entry, 6).map((item) => item.day)).toEqual([
+        0, 7, 14, 21, 28, 56,
+      ])
+    }
+  })
+
+  it('戈利木单抗第 2 周后按 4 周间隔维持', () => {
+    const entries = DISEASE_DRUGS.filter((entry) =>
+      /第 0 周 200mg，第 2 周 100mg/.test(entry.doseNote ?? ''),
+    )
+    expect(entries.length).toBeGreaterThan(0)
+    for (const entry of entries) {
+      expect(plannedDoses(entry, 3)).toEqual([
+        { day: 0, dose: 200 },
+        { day: 14, dose: 100 },
+        { day: 42, dose: 50 },
+      ])
     }
   })
 })

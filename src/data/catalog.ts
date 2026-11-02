@@ -311,7 +311,7 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     doseNote: '第 0、2、6 周诱导，之后每 8 周；剂量按体重 5mg/kg',
     regimen: regimen(
       '克罗恩病 0/2/6 周诱导 + 每 8 周维持',
-      [ph('loading', 28, 2, 5, 'mg/kg'), ph('maintenance', 56, 0, 5, 'mg/kg')],
+      [ph('loading', 14, 1, 5, 'mg/kg'), ph('loading', 28, 1, 5, 'mg/kg'), ph('maintenance', 56, 0, 5, 'mg/kg')],
       3,
     ),
   },
@@ -334,7 +334,7 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     doseNote: '第 0、2、6 周各 300mg，之后每 8 周',
     regimen: regimen(
       '维得利珠单抗 0/2/6 周诱导',
-      [ph('loading', 28, 2, 300), ph('maintenance', 56, 0, 300)],
+      [ph('loading', 14, 1, 300), ph('loading', 28, 1, 300), ph('maintenance', 56, 0, 300)],
       3,
     ),
   },
@@ -345,7 +345,7 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     doseNote: '静脉 600mg 第 0、4、8 周，之后皮下 180mg 每 8 周',
     regimen: regimen(
       '瑞莎珠单抗静脉诱导 + 皮下维持',
-      [ph('loading', 28, 2, 600), ph('maintenance', 56, 0, 180)],
+      [ph('loading', 28, 2, 600), ph('loading', 56, 1, 600), ph('maintenance', 56, 0, 180)],
       3,
     ),
   },
@@ -358,7 +358,7 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     doseNote: '第 0、2、6 周诱导，之后每 8 周；剂量按体重 5mg/kg',
     regimen: regimen(
       '溃疡性结肠炎 0/2/6 周诱导',
-      [ph('loading', 28, 2, 5, 'mg/kg'), ph('maintenance', 56, 0, 5, 'mg/kg')],
+      [ph('loading', 14, 1, 5, 'mg/kg'), ph('loading', 28, 1, 5, 'mg/kg'), ph('maintenance', 56, 0, 5, 'mg/kg')],
       3,
     ),
   },
@@ -380,7 +380,7 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     doseNote: '第 0、2、6 周各 300mg，之后每 8 周',
     regimen: regimen(
       '维得利珠单抗 0/2/6 周诱导',
-      [ph('loading', 28, 2, 300), ph('maintenance', 56, 0, 300)],
+      [ph('loading', 14, 1, 300), ph('loading', 28, 1, 300), ph('maintenance', 56, 0, 300)],
       3,
     ),
   },
@@ -402,7 +402,7 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     doseNote: '第 0 周 200mg，第 2 周 100mg，之后 50mg 每 4 周',
     regimen: regimen('戈利木单抗诱导 + 维持', [
       ph('loading', 14, 1, 200),
-      ph('loading', 14, 1, 100),
+      ph('loading', 28, 1, 100),
       ph('maintenance', 28, 0, 50),
     ]),
   },
@@ -415,6 +415,7 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     doseNote: '第 0–4 周每周 300mg，第 5 周起每 4 周 300mg',
     regimen: regimen('司库奇尤单抗 5 周诱导 + 每 4 周', [
       ph('loading', 7, 4, 300),
+      ph('loading', 28, 1, 300),
       ph('maintenance', 28, 0, 300),
     ]),
   },
@@ -446,7 +447,7 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     doseNote: '第 0、4 周各一次，之后每 12 周；体重 >100kg 可用 90mg',
     regimen: regimen(
       '乌司奴单抗 0/4 周 + 每 12 周',
-      [ph('loading', 28, 1, 45), ph('maintenance', 84, 0, 45)],
+      [ph('loading', 28, 1, 45), ph('loading', 84, 1, 45), ph('maintenance', 84, 0, 45)],
       5,
     ),
   },
@@ -457,7 +458,7 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     doseNote: '第 0、4 周各 100mg，之后每 8 周',
     regimen: regimen(
       '古塞奇尤单抗 0/4 周 + 每 8 周',
-      [ph('loading', 28, 1, 100), ph('maintenance', 56, 0, 100)],
+      [ph('loading', 28, 1, 100), ph('loading', 56, 1, 100), ph('maintenance', 56, 0, 100)],
       3,
     ),
   },
@@ -468,7 +469,7 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     doseNote: '第 0、4 周各 150mg，之后每 12 周',
     regimen: regimen(
       '瑞莎珠单抗 0/4 周 + 每 12 周',
-      [ph('loading', 28, 1, 150), ph('maintenance', 84, 0, 150)],
+      [ph('loading', 28, 1, 150), ph('loading', 84, 1, 150), ph('maintenance', 84, 0, 150)],
       5,
     ),
   },
@@ -495,6 +496,7 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     doseNote: '第 0–4 周每周 300mg，之后每 4 周 300mg',
     regimen: regimen('司库奇尤单抗 5 周诱导 + 每 4 周', [
       ph('loading', 7, 4, 300),
+      ph('loading', 28, 1, 300),
       ph('maintenance', 28, 0, 300),
     ]),
   },
@@ -536,7 +538,7 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     doseNote: '第 0、4 周各一次，之后每 12 周',
     regimen: regimen(
       '乌司奴单抗 0/4 周 + 每 12 周',
-      [ph('loading', 28, 1, 45), ph('maintenance', 84, 0, 45)],
+      [ph('loading', 28, 1, 45), ph('loading', 84, 1, 45), ph('maintenance', 84, 0, 45)],
       5,
     ),
   },
@@ -547,7 +549,7 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     doseNote: '第 0、4 周各 100mg，之后每 8 周',
     regimen: regimen(
       '古塞奇尤单抗 0/4 周 + 每 8 周',
-      [ph('loading', 28, 1, 100), ph('maintenance', 56, 0, 100)],
+      [ph('loading', 28, 1, 100), ph('loading', 56, 1, 100), ph('maintenance', 56, 0, 100)],
       3,
     ),
   },
@@ -564,7 +566,7 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     firstLine: false,
     doseNote: '第 0、2、4 周各 400mg，之后 200mg 每 2 周',
     regimen: regimen('赛妥珠单抗 诱导 + 每 2 周', [
-      ph('loading', 14, 2, 400),
+      ph('loading', 14, 3, 400),
       ph('maintenance', 14, 0, 200),
     ]),
   },
@@ -598,6 +600,7 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     doseNote: '第 0–4 周每周 150mg，之后每 4 周 150mg；部分患者用 300mg',
     regimen: regimen('司库奇尤单抗 5 周诱导 + 每 4 周', [
       ph('loading', 7, 4, 150),
+      ph('loading', 28, 1, 150),
       ph('maintenance', 28, 0, 150),
     ]),
   },
@@ -624,7 +627,7 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     firstLine: false,
     doseNote: '第 0、2、4 周各 400mg，之后 200mg 每 2 周',
     regimen: regimen('赛妥珠单抗 诱导 + 每 2 周', [
-      ph('loading', 14, 2, 400),
+      ph('loading', 14, 3, 400),
       ph('maintenance', 14, 0, 200),
     ]),
   },
@@ -635,7 +638,7 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     doseNote: '第 0、2、6 周诱导，之后每 6–8 周；剂量按体重 5mg/kg',
     regimen: regimen(
       '英夫利西单抗 0/2/6 周诱导',
-      [ph('loading', 28, 2, 5, 'mg/kg'), ph('maintenance', 56, 0, 5, 'mg/kg')],
+      [ph('loading', 14, 1, 5, 'mg/kg'), ph('loading', 28, 1, 5, 'mg/kg'), ph('maintenance', 56, 0, 5, 'mg/kg')],
       3,
     ),
   },
@@ -686,7 +689,7 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     firstLine: false,
     doseNote: '第 0、2、4 周各 400mg，之后 200mg 每 2 周',
     regimen: regimen('赛妥珠单抗 诱导 + 每 2 周', [
-      ph('loading', 14, 2, 400),
+      ph('loading', 14, 3, 400),
       ph('maintenance', 14, 0, 200),
     ]),
   },
@@ -715,7 +718,7 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     doseNote: '第 0、2、6 周诱导，之后每 8 周；剂量按体重 3mg/kg',
     regimen: regimen(
       '英夫利西单抗 0/2/6 周诱导',
-      [ph('loading', 28, 2, 3, 'mg/kg'), ph('maintenance', 56, 0, 3, 'mg/kg')],
+      [ph('loading', 14, 1, 3, 'mg/kg'), ph('loading', 28, 1, 3, 'mg/kg'), ph('maintenance', 56, 0, 3, 'mg/kg')],
       3,
     ),
   },
@@ -815,7 +818,8 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     firstLine: false,
     doseNote: '前 3 次每 4 周 30mg，之后每 8 周 30mg',
     regimen: regimen('本瑞利珠单抗 诱导 + 每 8 周', [
-      ph('loading', 28, 3, 30),
+      ph('loading', 28, 2, 30),
+      ph('loading', 56, 1, 30),
       ph('maintenance', 56, 0, 30),
     ], 5),
   },
@@ -845,7 +849,7 @@ export const DISEASE_DRUGS: DiseaseDrug[] = [
     doseNote: '第 0、2、6 周诱导，之后每 8 周；剂量按体重 5mg/kg',
     regimen: regimen(
       '英夫利西单抗 0/2/6 周诱导',
-      [ph('loading', 28, 2, 5, 'mg/kg'), ph('maintenance', 56, 0, 5, 'mg/kg')],
+      [ph('loading', 14, 1, 5, 'mg/kg'), ph('loading', 28, 1, 5, 'mg/kg'), ph('maintenance', 56, 0, 5, 'mg/kg')],
       3,
     ),
   },
