@@ -51,7 +51,7 @@ src/
   export/                 CSV / Excel / JSON / PDF 导出
   store/                  zustand 全局状态
   ui/                     主题、通用组件、图标
-docs/                     设计方案、接口契约、导入格式
+docs/                     产品文档、开发文档、设计方案、接口契约、导入格式
 tools/import-editor/      补录数据并导出 JSON / Excel 的静态网页工具
 ```
 
@@ -122,8 +122,8 @@ tools/import-editor/      补录数据并导出 JSON / Excel 的静态网页工�
 - 内置药：`seedBuiltinMedications` 按 `catalog_key` 认领
 - 症状标签：`seedBuiltinSymptomTags` 用 `app_setting.symptom_tags_seeded` 标记，**不要**用"表为空就播种"，否则用户删空后会被重新塞回来
 
-仓库层主要入口：`medications`、`treatments`（`list / getActive / get / create / addLine / setActive / update / remove`）、
-`doseLogs`（`list / listBetween / create / update / remove`）、`symptoms`、`symptomTags`、`reminderRules`、`settings`。
+仓库层主要入口：`medications`、`treatments`（`list / getActive / get / create / addLine / removeLine / setLineEnded / setActive / update / remove`）、
+`efficacyEvents`（`list / create / remove`）、`doseLogs`（`list / listBetween / create / update / remove`）、`symptoms`、`symptomTags`、`reminderRules`、`settings`。
 
 写操作统一顺序（见 `src/store/app.ts`）：
 
@@ -137,10 +137,11 @@ repo 写入 → useAppStore.reload() → rescheduleAll() → 返回 notifyWarnin
 
 - 导入：支持 `.xlsx` / `.xls` / `.json`。当前格式 **v3**（v1/v2 仍兼容），见 `docs/import-format.md`。
 - JSON v3 顶层：`{ format, version: 3, medications, injections, oralLogs, symptoms, lineStates, efficacyEvents }`；v1/v2 没有后两段。
-- Excel 五张工作表：`注射记录`、`症状记录`、`药物`、`口服打卡`、`填写说明`（App 导出的 `.xlsx` 另有只读的 `用药线`）。
+- Excel 五张工作表：`注射记录`、`症状记录`、`药物`、`口服打卡`、`填写说明`；
+  App 导出的 `.xlsx` 同样是五张，但用只读的 `用药线` 替代 `填写说明`。
 - 解析器 `src/import/schema.ts`、`src/import/spreadsheet.ts` 必须是纯函数（不碰 React Native），便于 vitest 直接测。
 - Excel 用 `xlsx`（SheetJS）解析，别再引入第二个表格库；日期既支持文本也支持 Excel 序列号。
-- 落库 `src/import/index.ts`：整个文件一个事务；包含打卡记录时必须已有激活的治疗方案；
+- 落库 `src/import/index.ts`：药物/用药线/打卡/症状在一个事务里；症状标签、用药线停用状态和疗效事件在事务后补齐；包含打卡记录时必须已有激活的治疗方案；
   - 药物按药名 / 通用名 / 商品名 / 内置目录名称互认，命中已有药只补空字段并合并商品名；
   - 注射/口服记录按「药名 → 当前方案同药的用药线」解析，找不到线时**自动新建**（注射线用导入记录的中位间隔，口服线默认每天一次）；
   - 重复记录按「打卡时间 + 用药线」跳过；症状按「时间 + 严重程度 + 症状组合」跳过；
@@ -216,7 +217,11 @@ npx expo export --platform android --output-dir .expo-verify   # 验证 Metro/He
 
 ## 12. 文档索引
 
-- `docs/design.md`：产品定位、信息架构、排程策略
-- `docs/contract.md`：模块接口与数据模型契约（含 v3、v5 变更；v5 已取代 v3 的 regimen 部分）
+- `docs/user-guide.md`：用户手册（首次设置、各页面操作、导出备份、常见问题）
+- `docs/prd.md`：产品需求文档（目标、范围、功能需求、验收标准、非功能需求）
+- `docs/product.md`：产品文档索引（指向用户手册和 PRD）
+- `docs/development.md`：开发文档（架构、数据模型、API 明细、时序图、测试、构建发布、技术债）
+- `docs/design.md`：早期产品设计稿（部分内容已过期，现状以 product/development/contract 为准）
+- `docs/contract.md`：模块接口与数据模型契约（含 v1–v7；v5 起取代 v1–v3 的 regimen 部分）
 - `docs/import-format.md`：导入文件格式（v3，兼容 v1/v2）与导入行为
 - `tools/import-editor/README.md`：网页工具的结构与修改提示

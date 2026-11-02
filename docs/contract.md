@@ -1,5 +1,9 @@
 # 实现契约 v1
 
+> **现行模型是 v5–v7**，完整说明见文末「补充 v5 / v6 / v7」小节。
+> 本文件前半部分保留 v1–v3 的历史契约；其中 `regimen / regimen_phase / injection`
+> 已从数据库删除，新代码请以 v5–v7 小节为准。
+
 所有子代理必须严格按本文件的类型与函数签名实现。**不得擅自改名、改参数、改返回值**。
 如有冲突，以本文件为准；确实需要变更时，写在完成报告里，不要静默改动。
 
@@ -311,7 +315,7 @@ medications.listForDisease(diseaseId: string): Promise<Medication[]>
 
 ## 约定
 
-- `settings` 固定 key：`disease_id`、`patient_name`、`onboarded_at`、`app_lock`、`theme_mode`、`dnd_start`、`dnd_end`；内部标记位 `symptom_tags_seeded` 只用于症状标签的首次播种，UI 不读取。
+- `settings` 固定 key：`disease_ids`（JSON 字符串数组，兼容旧的单值 `disease_id`）、`patient_name`、`onboarded_at`、`app_lock`、`theme_mode`、`dnd_start`、`dnd_end`；内部标记位 `symptom_tags_seeded` 只用于症状标签的首次播种，UI 不读取。
 - **`route === 'iv'` 时不要展示"注射部位"选择器**（部位轮换只对皮下有意义），但 `Injection.site` 必须写合法值，统一写 `'abdomen_ul'`。
 - 涉及"按体重计算剂量"的文案必须带"以医生处方为准"。
 - 面向用户的文案里不要出现"推荐用药""建议换药"这类表述。
@@ -691,7 +695,7 @@ export interface DoseLogInput {
 约束：
 
 - 一个治疗方案只能有一个 `isHost: true` 的注射线；`addLine` 和 `update` 都会维护这个不变式。
-- `create` 和 `addLine` 会拒绝重复添加同一种药；`update` 修改 `medicationId` 时目前没有查重（已知缺口）。
+- `create`、`addLine` 和 `update` 都会拒绝在同一个治疗方案里重复添加同一种药；查重按「`kind` + `medication_id`」，同一种药可以分别作为注射线和口服线存在。
 - 口服线不保存 `phases`（传入也会被忽略）；注射线至少要有一个 `phases`。
 - `doseLogs.create` 在 `status = 'done'` 时必须提供 `takenAt`。
 - `symptom_log.dose_log_id` 可以关联注射或口服打卡；`ON DELETE SET NULL`，删打卡不会连带删症状。

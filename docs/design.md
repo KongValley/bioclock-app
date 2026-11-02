@@ -1,5 +1,9 @@
 # BioClock 设计方案 v0.1
 
+> **现状说明（2026-11）**：本文档是早期设计稿。当前实现为 Expo SDK 58 + 手写 SQL（无 Drizzle）、
+> v7「治疗组合」模型、5 个 Tab、4 步引导；数据模型与迁移以 [`docs/contract.md`](./contract.md) 的 v5–v7 小节为准。
+> 产品功能与用户流程见 [`user-guide.md`](./user-guide.md) / [`prd.md`](./prd.md)，开发实现见 [`development.md`](./development.md)。
+
 > 记录并提醒用户按时注射生物制剂的个人健康工具。
 > 技术栈：React Native + Expo，数据纯本地（SQLite），无账号、无服务器、无网络请求。
 
@@ -27,7 +31,7 @@
 
 1. **该打针了**：周五 9:00 收到"今天该注射了"，打开就是注射登记页，30 秒打完卡。
 2. **忘了上次啥时候**：打开首页，一眼看到"上次 10 月 18 日 · 距下次还有 6 天"。
-3. **复诊要交记录**：一键导出 6 个月 CSV / PDF，医生能看到日期、药名、剂量、部位、不良反应。
+3. **复诊要交记录**：一键导出 6 个月的 Excel / PDF，医生能看到日期、药名、剂量、部位、不良反应。
 
 ## 3. 信息架构
 
@@ -43,7 +47,7 @@
    └─ 下次注射倒计时卡、今日待办、快速登记 FAB、轮换部位提示
 ```
 
-首次启动走 3 步 Onboarding：选药（预置常用生物制剂 + 自定义） → 选方案（间隔） → 设定提醒时间，然后进首页。
+首次启动走 4 步 Onboarding：病种（可多选） → 药物（预置常用生物制剂 + 自定义） → 方案（间隔/负荷） → 提醒时间，然后进首页。
 
 ## 4. 关键流程
 
@@ -60,13 +64,12 @@
 
 ### 4.2 下次时间怎么算（核心设计决策）
 
-三种锚点策略，默认选 **A**：
+两种锚点策略，默认选 **A**：
 
 | 策略 | 规则 | 适合 |
 | --- | --- | --- |
 | **A. 实际注射为锚（默认）** | 下次 = 本次实际时间 + 间隔 | 大多数自我注射患者，符合"打完起算"的真实医嘱 |
 | B. 计划为锚 | 下次 = 计划时间 + 间隔，不因迟到顺延 | 严格按日历（如每 4 周固定周五） |
-| C. 固定日历 | 每月固定某日 | 月度制剂 |
 
 配套**允许偏差窗口**：`±N 天`（默认 ±2），窗口内算"按时"，超出算"提前/延迟"，只在趋势页做统计，不弹警告、不显示红色恐吓性 UI。
 
@@ -94,32 +97,29 @@
 首次设置时可以录入「上次注射时间」，作为当前方案的真实锚点；注射登记页支持「保存并继续补录」，
 方便从纸质记录或旧 App 连续补录历史。
 
-## 5. 数据模型（expo-sqlite + Drizzle）
+## 5. 数据模型（expo-sqlite，手写 SQL，v7）
 
-```ts
-// 药物与方案
-medication       (id, name, generic_name, default_dose, unit, color, is_builtin, created_at)
-regimen          (id, medication_id, name, anchor: 'actual'|'planned'|'calendar',
-                  window_days, is_active, created_at)
-regimen_phase    (id, regimen_id, order_idx, kind: 'loading'|'maintenance',
-                  interval_days, repeat_count, dose, unit)
-// 注射记录
-injection        (id, regimen_id, medication_id, injected_at, dose, unit,
-                  site, lot_number, note, created_at, updated_at)
-// 症状
-symptom_log      (id, logged_at, severity 1-5, tags: json, note,
-                  temperature, injection_id nullable)
-// 提醒与偏好
-reminder_rule    (id, regimen_id, offsets: json /* [-2,-1,0] 天 */, time_of_day 'HH:mm',
-                  snooze_minutes, enabled)
-app_setting      (key, value)   // app_lock, theme, locale, dnd_window, disclaimer_accepted_at
+当前是 v7「治疗组合」模型，完整字段与约束见 [`docs/contract.md`](./contract.md) 的 v5–v7 小节：
+
+```text
+medication       药物目录 + 用户自建药
+treatment        治疗组合（同一时间只有一个 is_active = 1）
+treatment_line   每条药一条：injection / oral，含主药、锚点、窗口、停用时间、口服计划列
+treatment_phase  仅注射线：loading / maintenance，按 order_idx 执行；effective_from 支持改间隔
+dose_log         注射与口服统一的打卡记录（done / skipped / missed）
+efficacy_event   疗效下降 / 失效 / 不耐受等事件
+symptom_log      症状记录（severity 1–5、NRS 疼痛、标签快照、关联 dose_log）
+symptom_tag      可维护的症状标签
+reminder_rule    每个治疗方案一条提醒规则
+app_setting      键值设置（病种、主题、免打扰、应用锁等）
 ```
 
 要点：
 
-- **下次注射时间不落库**，一律由 `injection` + `regimen_phase` 实时推导。避免"改了方案但计划表是旧的"这类经典不一致 bug。
+- **下次注射时间不落库**，一律由 `treatment_line` + `treatment_phase` + `dose_log` 实时推导。避免"改了方案但计划表是旧的"这类经典不一致 bug。
 - `site` 存枚举而非自由文本，才能做轮换算法和统计。
 - 时间统一存 **UTC 毫秒**，展示时转本地时区。这是提醒类 App 最容易踩的坑（跨时区/夏令时）。
+- 结构变更只允许加列/加表，并且必须同步 schema、迁移、仓库、类型、迁移测试和契约文档。
 
 ## 6. 提醒策略（本地通知）
 
@@ -170,19 +170,19 @@ UI 用人体示意图 + 高亮点，点一下即选中。首次使用时说明"�
 
 ## 9. 导出
 
-- **CSV**：全部注射 + 症状原始数据，UTF-8 BOM（Excel 中文不乱码）。
+- **CSV**：全部注射记录（症状在 Excel / PDF 中导出），UTF-8 BOM（Excel 中文不乱码）。
 - **换机转移**：设置页「换机导出（完整备份）」一键生成 `bioclock-transfer-*.json`，包含方案、用药线、阶段、提醒、打卡、症状和疗效事件；
-  新手机用「导入数据」选择该文件即可恢复，不需要先手动建方案。
-- **PDF 就诊报告**：`expo-print` 生成 HTML→PDF，含患者自填姓名/出生年（可选）、时间范围、注射表格、症状摘要、依从性统计。单向输出，不落云。
+  新手机可以在引导页第一步直接选择该文件，或进入「设置 → 导入数据」恢复，不需要先手动建方案。
+- **PDF 就诊报告**：`expo-print` 生成 HTML→PDF，含患者自填姓名（可选）、时间范围、注射表格、症状摘要、依从性统计。单向输出，不落云。
 - 分享用 `expo-sharing`，生成的文件放 cache 目录，导出后提示"该文件含健康信息，请谨慎分享"。
 
 ## 10. 技术选型
 
 | 用途 | 选择 | 理由 |
 | --- | --- | --- |
-| 框架 | Expo SDK 54 + expo-router | 文件路由、OTA、开发体验 |
+| 框架 | Expo SDK 58 + expo-router | 文件路由、OTA、开发体验 |
 | 语言 | TypeScript strict | 医疗数据模型需要类型保护 |
-| 存储 | expo-sqlite + Drizzle ORM | 关系清楚、可迁移、比 AsyncStorage 靠谱 |
+| 存储 | expo-sqlite（手写 SQL） | 关系清楚、可迁移、比 AsyncStorage 靠谱 |
 | 状态 | Zustand + 派生 selector | 轻，不需要 Redux |
 | 校验 | Zod | 导入/导出与表单统一校验 |
 | 通知 | expo-notifications | 唯一成熟方案 |
@@ -223,7 +223,7 @@ docs/
 
 | 阶段 | 内容 | 验收 |
 | --- | --- | --- |
-| **M0** 骨架 | Expo 工程、4 个 Tab、主题、SQLite + Drizzle 建表 | 能跑起来、能建一条数据 |
+| **M0** 骨架 | Expo 工程、5 个 Tab、主题、SQLite 建表 | 能跑起来、能建一条数据 |
 | **M1** 核心闭环 | 方案配置 + 注射登记 + 倒计时 + 排程引擎单测 | 场景 1、2 可完成 |
 | **M2** 提醒 | 通知排程/滚动补排/免打扰/权限降级 | 真机收得到、改方案后不重复不遗漏 |
 | **M3** 记录增强 | 部位轮换、症状日志、趋势图、依从性 | 场景 3 数据完整 |
