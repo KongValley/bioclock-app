@@ -139,6 +139,7 @@ export function makeLog(input: {
   dose?: number | null
   unit?: string
   site?: InjectionSite | null
+  createdAt?: number
 }): DoseLog {
   const {
     lineId = 'line-host',
@@ -148,6 +149,7 @@ export function makeLog(input: {
     dose = 40,
     unit = 'mg',
     site = 'abdomen_ul',
+    createdAt = takenAt ?? scheduledAt ?? T0,
   } = input
 
   seq += 1
@@ -162,8 +164,8 @@ export function makeLog(input: {
     site,
     lotNumber: null,
     note: null,
-    createdAt: takenAt ?? scheduledAt ?? T0,
-    updatedAt: takenAt ?? scheduledAt ?? T0,
+    createdAt,
+    updatedAt: createdAt,
   }
 }
 

@@ -35,9 +35,12 @@ export function buildIntervalChangePhases(
     throw new Error('当前还在负荷阶段，请等进入维持阶段后再调整间隔')
   }
 
-  // 同一时间点只保留一个阶段，避免重复调整后出现重叠的生效阶段。
-  const kept = sorted.filter((phase) => phase.effectiveFrom !== effectiveFrom)
-  const base = kept.length > 0 ? kept[kept.length - 1] : last
+  // 新阶段会取代同一时间及之后的所有生效阶段。只按 effectiveFrom 完全相等去重
+  // 会留下更晚的旧阶段，排程在走到新阶段后又会跳回旧生效日，凭空多出一针。
+  const kept = sorted.filter(
+    (phase) => phase.effectiveFrom === null || phase.effectiveFrom < effectiveFrom,
+  )
+  const base = kept.length > 0 ? kept[kept.length - 1] : sorted[0]
   return [
     ...kept.map((phase, orderIdx) => ({
       orderIdx,

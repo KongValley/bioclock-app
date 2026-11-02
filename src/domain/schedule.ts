@@ -17,7 +17,8 @@ import type {
  *   `syncWithHost` 的线不自己推进，直接跟随本 treatment 宿主线（isHost=true 的注射线）的针日。
  * - 口服线：按 startDate + durationDays + frequency 生成打卡点。
  *
- * 所有时间均为 UTC 毫秒，内部只做毫秒算术，不做时区换算（周几按 UTC 周几判定）。
+ * 所有时间均为 UTC 毫秒；日期边界和口服「周几」按设备本地时区计算
+ * （测试通过 TZ=UTC 固定时区）。
  * 计划表不落库，每次由「治疗线 + 用药记录 + 当前时间」实时推导。
  */
 
@@ -128,6 +129,32 @@ function isInjectionLine(line: TreatmentLine): boolean {
 /** 该线是否是同步线（只有注射线才可能同步） */
 function isSyncedLine(line: TreatmentLine): boolean {
   return isInjectionLine(line) && line.syncWithHost === true
+}
+
+/**
+ * 为了让通知覆盖 horizonDays 指定的时间窗，需要生成多少个未来计划。
+ *
+ * 按所有注射线里最短的阶段间隔估算，再加 2 针余量（覆盖窗口末端的提醒偏移）。
+ * 通知排程用它替代默认的 2 针，否则 14 天间隔的药只会排到约 4 周。
+ */
+export function futureDoseCountForHorizon(
+  lines: TreatmentLine[],
+  horizonDays: number,
+): number {
+  const intervals: number[] = []
+  for (const line of lines) {
+    if (!isInjectionLine(line)) continue
+    for (const phase of line.phases ?? []) {
+      if (Number.isFinite(phase.intervalDays) && phase.intervalDays > 0) {
+        intervals.push(phase.intervalDays)
+      }
+    }
+  }
+  if (intervals.length === 0) return INJECTION_FUTURE_DOSE_COUNT
+
+  const days = Math.max(1, Math.ceil(horizonDays))
+  const needed = Math.ceil(days / Math.min(...intervals)) + 2
+  return Math.min(1000, Math.max(INJECTION_FUTURE_DOSE_COUNT, needed))
 }
 
 /** 解析宿主线：本 treatment 里 isHost 的那条注射线；没有则取第一条非同步注射线。 */
@@ -259,7 +286,9 @@ interface SortedLog {
 }
 
 function logTime(log: DoseLog): number {
-  return log.takenAt ?? log.scheduledAt ?? 0
+  // 跳过/漏用可能既没有 takenAt 也没有 scheduledAt；退回创建时间，
+  // 避免落到 1970 年后在计划和依从性里完全消失。
+  return log.takenAt ?? log.scheduledAt ?? log.createdAt
 }
 
 function sortLogs(logs: DoseLog[]): SortedLog[] {
@@ -602,8 +631,9 @@ function normalizeWeekdays(daysOfWeek: number[]): number[] {
 }
 
 /**
- * weekly 没有指定周几时，按「一周第 n 天」近似均匀分布（以周一为起点）：
+ * weekly 按「每周 N 次」换算到周几，以周一为起点均匀分布：
  * 每周 1 次 → 周一；2 次 → 周一、周五；3 次 → 周一、周三、周六；……
+ * weekly 不读取 daysOfWeek，避免两个参数冲突。
  */
 function evenlySpacedWeekdays(timesPerPeriod: number): number[] {
   const count = Math.max(1, Math.min(7, Math.round(timesPerPeriod)))
@@ -617,7 +647,7 @@ function evenlySpacedWeekdays(timesPerPeriod: number): number[] {
   return days.sort((a, b) => a - b)
 }
 
-/** 口服线按哪几个（UTC）周几打卡 */
+/** 口服线按哪几个（本地）周几打卡 */
 export function oralWeekdays(oral: OralConfig): number[] {
   if (oral.frequency === 'daily') return evenlySpacedWeekdays(7)
   if (oral.frequency === 'custom') return normalizeWeekdays(oral.daysOfWeek ?? [])
@@ -627,9 +657,9 @@ export function oralWeekdays(oral: OralConfig): number[] {
 
 /**
  * 生成一条口服线的打卡点：
- * - 起点 = startDate 当天（UTC 0 点）；
+ * - 起点 = startDate 当天的本地 0 点；
  * - daily → 天天打卡；custom → 只在 daysOfWeek 指定的周几；
- * - weekly → 每周 timesPerPeriod 次（优先用 daysOfWeek，否则均匀分布）；
+ * - weekly → 每周 timesPerPeriod 次，按周一为起点均匀分布；
  * - 历史全量输出，未来覆盖到 max(now, startDate) + horizonDays；
  * - durationDays 非 null 时到达疗程天数后停止。
  */
@@ -693,19 +723,24 @@ export function buildOralPlans(input: {
     if (log) applyLog(plan, log, now, null)
   })
 
-  // 停用或疗程结束后补录的打卡，仍以计划点的形式显示出来，避免“库里有、界面没有”。
-  const boundary =
-    endedAt ??
-    (durationDays !== null && durationDays !== undefined
+  // 没认领到计划点的打卡（例如停用后补录、疗程结束后补录）仍以计划点的形式显示，
+  // 避免“库里有、界面没有”。只追加最后一个计划边界之后的记录；计划外的临时服药
+  // 仍留在历史里，但不应该被当成漏服计划。
+  const boundary = earliestEnd(
+    endedAt,
+    durationDays !== null && durationDays !== undefined
       ? startDay + durationDays * DAY - 1
-      : null)
+      : null,
+  )
   if (boundary !== null) {
     const seenDays = new Set(plans.map((plan) => startOfLocalDay(plan.plannedAt)))
     for (const item of sortedLogs) {
       if (assignedIds.has(item.log.id)) continue
       if (item.sortAt <= boundary) continue
       const day = startOfLocalDay(item.sortAt)
+      if (day < startDay) continue
       if (seenDays.has(day)) continue
+      if (plans.length >= MAX_ORAL_PLANS) break
       seenDays.add(day)
       const plan: SchedulePlan = {
         index: plans.length,

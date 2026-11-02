@@ -7,6 +7,7 @@ import {
   buildSchedule,
   classifyStatus,
   classifyWindow,
+  futureDoseCountForHorizon,
   nextDose,
   nextDoseForLine,
   oralWeekdays,
@@ -423,10 +424,10 @@ describe('口服线：打卡点生成', () => {
     expect(plans[2].status).toBe('due')
   })
 
-  it('weekly：给定 daysOfWeek 时只在指定周几打卡', () => {
-    // T0 = 周一(1)；选周一、周四(4)
+  it('weekly：按每周次数均匀分布（忽略 daysOfWeek）', () => {
+    // T0 = 周一(1)；每周 2 次 → 周一、周五(5)
     const plans = buildOralPlans({
-      line: makeOralLine({ frequency: 'weekly', timesPerPeriod: 2, daysOfWeek: [1, 4] }),
+      line: makeOralLine({ frequency: 'weekly', timesPerPeriod: 2 }),
       logs: [],
       now: T0 + 7 * DAY,
     })
@@ -509,6 +510,53 @@ describe('口服线：打卡点生成', () => {
         now: T0,
       }),
     ).toThrow('自定义服药频率至少要选择一周中的一天')
+  })
+
+  it('疗程结束后没有打卡时间的跳过记录按创建时间显示', () => {
+    const skipped = makeLog({
+      lineId: 'line-oral',
+      status: 'skipped',
+      takenAt: null,
+      scheduledAt: null,
+      createdAt: T0 + 5 * DAY,
+    })
+    const plans = buildOralPlans({
+      line: makeOralLine({ frequency: 'daily', durationDays: 2, endedAt: T0 + 10 * DAY }),
+      logs: [skipped],
+      now: T0 + 12 * DAY,
+    })
+
+    const extra = plans.find((plan) => (plan.plannedAt - T0) / DAY === 5)
+    expect(extra).toBeDefined()
+    expect(extra?.doseLogId).toBe(skipped.id)
+    expect(extra?.status).toBe('missed')
+  })
+})
+
+describe('通知覆盖窗口', () => {
+  it('14 天间隔至少能排满 56 天', () => {
+    const line = makeInjectionLine({
+      phases: [makePhase({ orderIdx: 0, intervalDays: 14 })],
+    })
+    const futureDoseCount = futureDoseCountForHorizon([line], 56)
+    expect(futureDoseCount).toBe(6)
+
+    const now = T0 + DAY
+    const plans = buildSchedule({
+      lines: [line],
+      logs: [injectionLog(0)],
+      now,
+      futureDoseCount,
+    })
+    expect((plans[plans.length - 1].plannedAt - now) / DAY).toBeGreaterThanOrEqual(56)
+  })
+
+  it('56 天间隔同样覆盖窗口，口服线不计入未来针数', () => {
+    const line = makeInjectionLine({
+      phases: [makePhase({ orderIdx: 0, intervalDays: 56 })],
+    })
+    expect(futureDoseCountForHorizon([line], 56)).toBe(3)
+    expect(futureDoseCountForHorizon([makeOralLine({})], 56)).toBe(2)
   })
 })
 

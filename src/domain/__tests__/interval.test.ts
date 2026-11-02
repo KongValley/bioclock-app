@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildIntervalChangePhases } from '../interval'
-import { makePhase } from './fixtures'
-
-const DAY = 86_400_000
-const T0 = Date.UTC(2026, 0, 5)
+import { buildInjectionPlans } from '../schedule'
+import { DAY, T0, injectionLog, makeInjectionLine, makePhase, offsets } from './fixtures'
 
 describe('从下一针起调整注射间隔', () => {
   it('保留旧阶段，在生效时间追加新维持阶段', () => {
@@ -65,6 +63,41 @@ describe('从下一针起调整注射间隔', () => {
 
     expect(second.filter((phase) => phase.effectiveFrom === effectiveFrom)).toHaveLength(1)
     expect(second[second.length - 1].intervalDays).toBe(35)
+  })
+
+  it('连续缩短间隔会清掉更晚的旧生效阶段，不会多排一针', () => {
+    const first = buildIntervalChangePhases(
+      [makePhase({ orderIdx: 0, kind: 'maintenance', intervalDays: 56, repeatCount: 0 })],
+      42,
+      T0 + 42 * DAY,
+    )
+    const second = buildIntervalChangePhases(
+      first.map((phase, index) => ({ ...phase, id: `p${index}`, lineId: 'line-host' })),
+      35,
+      T0 + 35 * DAY,
+    )
+
+    expect(
+      second.filter(
+        (phase) => phase.effectiveFrom !== null && phase.effectiveFrom >= T0 + 35 * DAY,
+      ),
+    ).toHaveLength(1)
+
+    const line = makeInjectionLine({
+      phases: second.map((phase, index) => ({
+        ...phase,
+        id: `p${index}`,
+        lineId: 'line-host',
+      })),
+    })
+    const plans = buildInjectionPlans({
+      line,
+      logs: [injectionLog(0)],
+      now: T0 + 50 * DAY,
+      futureDoseCount: 6,
+    })
+
+    expect(offsets(plans).slice(0, 4)).toEqual([0, 35, 70, 105])
   })
 
   it('负荷阶段不允许调整', () => {

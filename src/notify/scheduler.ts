@@ -9,7 +9,7 @@ import type {
   Treatment,
   TreatmentLine,
 } from '@/types'
-import { buildSchedule, ORAL_HORIZON_DAYS } from '@/domain/schedule'
+import { buildSchedule, futureDoseCountForHorizon, ORAL_HORIZON_DAYS } from '@/domain/schedule'
 import type { SchedulePlan } from '@/domain/schedule'
 import { buildReminderContent, NOTIFY_PREP_HINT } from './content'
 
@@ -170,8 +170,9 @@ export async function cancelAll(): Promise<void> {
 }
 
 /**
- * 契约中的 buildSchedule 只返回「历史 + 未来 2 针」，不足以覆盖 8 周。
- * 若末尾计划还没到 horizon，则以 horizon 为 now 再取一次，并按 (lineId, index) 合并。
+ * buildSchedule 默认只返回「历史 + 未来 2 针」，不足以覆盖 8 周。
+ * 这里按所有注射线的最短间隔算出需要多少未来针，确保 14/7 天间隔的药
+ * 也能排满整个通知窗口。
  */
 function collectPlansThrough(
   treatment: Treatment,
@@ -183,7 +184,13 @@ function collectPlansThrough(
     ORAL_HORIZON_DAYS,
     Math.ceil((horizon - now) / DAY_MS) + ORAL_HORIZON_DAYS,
   )
-  return buildSchedule({ lines: treatment.lines, logs, now, horizonDays })
+  return buildSchedule({
+    lines: treatment.lines,
+    logs,
+    now,
+    horizonDays,
+    futureDoseCount: futureDoseCountForHorizon(treatment.lines, horizonDays),
+  })
 }
 
 function buildInjectionDrafts(input: {
