@@ -1448,7 +1448,8 @@ export const efficacyEvents = {
     return rows.map(mapEfficacyEvent)
   },
 
-  async create(input: EfficacyEventInput): Promise<EfficacyEvent> {
+  /** transaction 仅供已经开启事务的导入流程复用，避免嵌套 BEGIN。 */
+  async create(input: EfficacyEventInput, transaction?: SQLiteDatabase): Promise<EfficacyEvent> {
     const lineId = requireNonEmptyString(input?.lineId, '用药线 ID')
     const kind = requireEfficacyKind(input.kind)
     const occurredAt = requireTimestamp(input.occurredAt, '发生时间')
@@ -1458,7 +1459,7 @@ export const efficacyEvents = {
     const note = normalizeOptionalText(input.note)
     const stopLine = input.stopLine === true
 
-    const db = await getDatabase()
+    const db = transaction ?? await getDatabase()
     await requireTreatmentLineExists(db, lineId)
 
     const row: EfficacyEventRow = {
@@ -1471,7 +1472,7 @@ export const efficacyEvents = {
       created_at: Date.now(),
     }
 
-    await db.withTransactionAsync(async () => {
+    const write = async () => {
       const counted = await db.getFirstAsync<{ n: number }>(
         `SELECT COUNT(*) AS n FROM dose_log
           WHERE line_id = ? AND status = 'done'
@@ -1505,7 +1506,9 @@ export const efficacyEvents = {
           lineId,
         )
       }
-    })
+    }
+    if (transaction) await write()
+    else await db.withTransactionAsync(write)
 
     return mapEfficacyEvent(row)
   },

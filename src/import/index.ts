@@ -160,12 +160,13 @@ function inferInterval(times: number[]): number {
 
 async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<ImportResult> {
   const hasDoseRecords = payload.injections.length > 0 || payload.oralLogs.length > 0
-  const [allMedications, allTreatments, allLogs, allSymptoms, allTags] = await Promise.all([
+  const [allMedications, allTreatments, allLogs, allSymptoms, allTags, allEvents] = await Promise.all([
     medicationRepo.list(),
     treatmentRepo.list(),
     doseLogRepo.list(),
     symptomRepo.list(),
     symptomTagRepo.list(),
+    efficacyEventRepo.list(),
   ])
 
   const active = allTreatments.find((treatment) => treatment.isActive) ?? null
@@ -224,12 +225,8 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
   }
 
   // ---- 用药线 ----
-  // 普通补录不往已停用的线里写新记录；换机恢复需要保留已停用线的历史，所以按 payload 标记放行。
-  const existingLines = active
-    ? active.lines.filter(
-        (line) => payload.preserveEndedLines === true || line.endedAt === null,
-      )
-    : []
+  // 停用线仍用于历史补录和去重，不重复新建同药线，也不自动恢复用药。
+  const existingLines = active?.lines ?? []
   const existingInjectionLines = existingLines.filter((line) => line.kind === 'injection')
   const existingOralLines = existingLines.filter((line) => line.kind === 'oral')
 
@@ -261,6 +258,14 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
       })
       .map((row) => row.takenAt)
 
+  const assertRecordAllowed = (line: TreatmentLine, row: ImportInjection | ImportOralLog) => {
+    const eventAt = 'injectedAt' in row ? row.injectedAt : row.takenAt
+    const time = resolveImportLogTime({ status: row.status, eventAt, scheduledAt: row.scheduledAt })
+    if (payload.preserveEndedLines !== true && line.endedAt !== null && time > line.endedAt) {
+      throw new Error(`用药线「${line.label}」已停用，停用后的记录请先恢复该用药线再导入`)
+    }
+  }
+
   const ensureLine = (
     kind: 'injection' | 'oral',
     medication: Medication,
@@ -268,7 +273,10 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
   ): { line: TreatmentLine | null; key: string } => {
     const key = `${kind}:${medication.id}`
     const existing = lineByMedication.get(key)
-    if (existing) return { line: existing, key: `existing:${existing.id}` }
+    if (existing) {
+      assertRecordAllowed(existing, sample)
+      return { line: existing, key: `existing:${existing.id}` }
+    }
 
     const pending = pendingLineByKey.get(key)
     if (pending) return { line: null, key: pending.key }
@@ -341,6 +349,7 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
     if (row.lineLabel) {
       const byLabel = lines.find((line) => line.label === row.lineLabel)
       if (byLabel) {
+        assertRecordAllowed(byLabel, row)
         return { lineKey: `existing:${byLabel.id}`, medication: findById(workingMedications, byLabel.medicationId) }
       }
     }
@@ -352,10 +361,11 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
       return { lineKey: ensured.key, medication }
     }
 
+    const runningLines = lines.filter((line) => line.endedAt === null)
     const host =
       kind === 'injection'
-        ? lines.find((line) => line.isHost) ?? lines[0] ?? null
-        : lines[0] ?? null
+        ? runningLines.find((line) => line.isHost) ?? runningLines[0] ?? null
+        : runningLines[0] ?? null
     return host
       ? { lineKey: `existing:${host.id}`, medication: findById(workingMedications, host.medicationId) }
       : { lineKey: null, medication: null }
@@ -468,7 +478,6 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
   // ---- 症状标签 ----
   const tagSet = new Set(allTags.map((tag) => tag.name.toLowerCase()))
   let tags = 0
-  let efficacyApplied = 0
   for (const row of payload.symptoms) {
     for (const tag of row.tags) {
       const normalized = tag.toLowerCase()
@@ -484,6 +493,33 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
     tagSet.add(normalized)
     tags += 1
   }
+
+  // 预览与落库共用匹配/去重结果，含当前文件将要新建的用药线。
+  const targets = [
+    ...existingLines.map((line) => ({ ...line, key: `existing:${line.id}` })),
+    ...pendingLines.map((line) => ({ ...line.input, key: line.key })),
+  ]
+  const findTarget = (lineLabel: string | null, medicationName: string | null, kind?: 'injection' | 'oral') => {
+    const candidates = targets.filter((line) => kind === undefined || line.kind === kind)
+    const medication = medicationName ? findMedicationByName(workingMedications, medicationName) : null
+    return candidates.find((line) => lineLabel !== null && line.label === lineLabel) ??
+      candidates.find((line) => medication != null && line.medicationId === medication.id) ?? null
+  }
+  const pendingStates = payload.lineStates.flatMap((state) => {
+    const target = findTarget(state.lineLabel, state.medicationName, state.kind)
+    return target ? [{ key: target.key, endedAt: state.endedAt }] : []
+  })
+  const seenEvents = new Set(allEvents.map((event) =>
+    `existing:${event.lineId}|${event.kind}|${minuteKey(event.occurredAt)}`,
+  ))
+  const pendingEvents = payload.efficacyEvents.flatMap((event) => {
+    const target = findTarget(event.lineLabel, event.medicationName)
+    if (!target) return []
+    const key = `${target.key}|${event.kind}|${minuteKey(event.occurredAt)}`
+    if (seenEvents.has(key)) return []
+    seenEvents.add(key)
+    return [{ ...event, key: target.key }]
+  })
 
   if (!dryRun) {
     const db = await getDatabase()
@@ -548,72 +584,32 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
           injectionId,
         })
       }
+      for (const row of payload.symptoms) {
+        for (const tag of row.tags) {
+          await symptomTagRepo.ensure(tag)
+        }
+      }
+      for (const name of payload.symptomTags ?? []) {
+        await symptomTagRepo.ensure(name)
+      }
+
+      for (const state of pendingStates) {
+        const lineId = lineIdByKey.get(state.key)
+        if (!lineId) throw new Error('导入时找不到对应的用药线')
+        await db.runAsync('UPDATE treatment_line SET ended_at = ? WHERE id = ?', state.endedAt, lineId)
+      }
+      for (const event of pendingEvents) {
+        const lineId = lineIdByKey.get(event.key)
+        if (!lineId) throw new Error('导入时找不到对应的用药线')
+        await efficacyEventRepo.create({
+          lineId,
+          kind: event.kind,
+          occurredAt: event.occurredAt,
+          note: event.note,
+          stopLine: false,
+        }, db)
+      }
     })
-
-    for (const row of payload.symptoms) {
-      for (const tag of row.tags) {
-        await symptomTagRepo.ensure(tag)
-      }
-    }
-    for (const name of payload.symptomTags ?? []) {
-      await symptomTagRepo.ensure(name)
-    }
-
-    if (payload.lineStates.length > 0 || payload.efficacyEvents.length > 0) {
-      const updatedActive = await treatmentRepo.getActive()
-      if (updatedActive) {
-        const meds = await medicationRepo.list()
-        const medNameById = new Map(meds.map((med) => [med.id, med.name]))
-        const findLine = (lineLabel: string | null, medName: string | null, kind: 'injection' | 'oral') => {
-          const candidates = updatedActive.lines.filter((line) => line.kind === kind)
-          return (
-            candidates.find((line) => lineLabel !== null && line.label === lineLabel) ??
-            candidates.find(
-              (line) =>
-                medName !== null && medNameById.get(line.medicationId) === medName,
-            ) ??
-            null
-          )
-        }
-
-        const db = await getDatabase()
-        for (const state of payload.lineStates) {
-          const line = findLine(state.lineLabel, state.medicationName, state.kind)
-          if (!line) continue
-          if ((line.endedAt ?? null) !== state.endedAt) {
-            await db.runAsync(
-              'UPDATE treatment_line SET ended_at = ? WHERE id = ?',
-              state.endedAt,
-              line.id,
-            )
-          }
-        }
-
-        if (payload.efficacyEvents.length > 0) {
-          const existing = await efficacyEventRepo.list()
-          const seen = new Set(
-            existing.map((event) => `${event.lineId}|${event.kind}|${minuteKey(event.occurredAt)}`),
-          )
-          for (const event of payload.efficacyEvents) {
-            const line =
-              findLine(event.lineLabel, event.medicationName, 'injection') ??
-              findLine(event.lineLabel, event.medicationName, 'oral')
-            if (!line) continue
-            const key = `${line.id}|${event.kind}|${minuteKey(event.occurredAt)}`
-            if (seen.has(key)) continue
-            await efficacyEventRepo.create({
-              lineId: line.id,
-              kind: event.kind,
-              occurredAt: event.occurredAt,
-              note: event.note,
-              stopLine: false,
-            })
-            seen.add(key)
-            efficacyApplied += 1
-          }
-        }
-      }
-    }
   }
 
   return {
@@ -625,7 +621,7 @@ async function executeImport(payload: ImportPayload, dryRun: boolean): Promise<I
     tags,
     medicationsCreated: medicationCreates.length,
     linesCreated: pendingLines.length,
-    efficacyEvents: dryRun ? payload.efficacyEvents.length : efficacyApplied,
+    efficacyEvents: pendingEvents.length,
   }
 }
 
