@@ -392,7 +392,7 @@ repo 写入
 
 `src/notify/scheduler.ts`。完整签名见 [§17.6](#176-通知)。
 
-- 滚动预排 **56 天**；单次最多 **60 条**，先保证注射提醒，再用剩余额度排口服。
+- 注射滚动预排 **56 天**，口服预排含当天的 **14 天**；单次最多 **60 条**，先保证注射提醒，再用剩余额度排口服。
 - 注射提醒：
   - 按 `reminder_rule.offsets` 生成（UI 可选 -3 / -2 / -1 / 0 天）；
   - 默认 `[-2, -1, 0]`，提醒时间默认 09:00；
@@ -401,14 +401,18 @@ repo 写入
 - 口服提醒：
   - 按每条线的 `oral.remindTime` 生成；
   - 同一天、同一提醒时间合并成一条；
-  - 日期已过或提醒时间已过的不再补排；
+  - 先应用免打扰顺延，再判断提醒时间是否已过；
   - **没有 `reminder_rule` 时仍会生成口服提醒**；只有 `reminder.enabled === false` 才会关闭口服推送。
 - 免打扰（默认 22:00–08:00）：落入区间的提醒顺延到区间结束；跨日顺延会破坏「今天 / 明天」文案，因此直接丢弃该条。
 - 点击通知：按 `data.type = 'dose'` 和 `kind` 跳转到注射 / 口服弹窗；引导期间点击会暂存，完成引导后补跳。
-- 排程串行化：`rescheduleAll` 内部用 generation + 队列避免并发重排互相覆盖；每次重排先 `cancelAll`。
+- 已完成、跳过、漏用或已关联打卡的计划都不再生成提醒（包含未来计划）。
+- 排程串行化：`rescheduleAll` 内部用 generation + 队列避免并发重排互相覆盖；读取数据并生成完整草稿后才 `cancelAll`，读取失败保留旧通知。
+- 冷启动、写操作后和从后台回到前台时续排；权限弹窗单独引起的 inactive 不触发续排。
 - `ensurePermissions` 返回通知权限和 Android 精确闹钟状态。
 
-已知未实现：`snoozeMinutes` 已存储并在设置页可调，但尚未注册通知 category / action；App 回到前台也没有自动补排（只在冷启动和写操作后重排）。
+已知未实现：`snoozeMinutes` 已存储并在设置页可调，但尚未注册通知 category / action。
+
+排程会幂等建立 Android 通知渠道，覆盖从备份恢复而跳过提醒引导的情况；渠道创建失败时保留旧通知。
 
 ## 10. 导入 / 导出 / 换机
 
@@ -424,12 +428,13 @@ repo 写入
 - 落库流程：
   1. 合并 / 新建药物（按药名、通用名、商品名、目录名互认）。
   2. 解析每条记录到「同药的用药线」；找不到时自动建线。
-  3. 药物 / 用药线 / 打卡 / 症状在一个事务里写入。
-  4. 症状标签、用药线停用状态、疗效事件在事务提交后补齐。
+  3. 在同一个事务中写入药物、用药线、打卡、症状、标签、停用状态和疗效事件，任一步失败全部回滚。
+  4. 已停用线参与历史匹配与去重；普通导入拒绝停用时间之后的新打卡，换机恢复保留原始记录。
 - 去重：
   - 打卡按「最终落库时间 + 用药线」；
   - 症状按「记录时间 + 严重程度 + 排序后的标签组合」；
   - 同一文件内重复记录只保留第一条。
+  - 疗效事件按「用药线 + 类型 + 发生分钟」去重；状态与事件优先匹配线名，再按药名别名匹配，支持本次新建线。
 - `resolveImportLogTime` 统一时间语义：done 用实际时间，skipped / missed 用计划时间（没有计划时间才退回事件时间）。
 - `previewImport` 用同一套逻辑只算数量，不写库。
 
@@ -437,10 +442,10 @@ repo 写入
 
 | 格式 | 内容 |
 | --- | --- |
-| CSV | 只导出注射线记录，10 列：注射时间、药名、通用名、剂量、单位、部位、批号、备注、计划时间、偏差天数；UTF-8 BOM |
+| CSV | 只导出注射线记录，11 列：注射时间、药名、通用名、剂量、单位、部位、批号、备注、计划时间、偏差天数、状态；UTF-8 BOM |
 | Excel | 5 张表：注射记录、症状记录、药物、口服打卡、用药线；注射表含状态列 |
 | JSON | v3 格式，可直接再导入；时间用本地时间字符串 |
-| PDF | 就诊报告：患者姓名（可选）、统计范围、注射记录、症状摘要、依从性统计；范围 90 / 180 / 365 天，默认 180 |
+| PDF | 就诊报告：患者姓名（可选）、统计范围、注射记录（含状态）、症状摘要、全部历史依从性统计；记录范围 90 / 180 / 365 天，默认 180 |
 | 换机快照 | `bioclock-transfer` v1，包含方案、用药线、阶段、口服计划、提醒、设置、症状标签、打卡、疗效事件和 `schemaVersion` |
 
 所有导出文件写入应用 cache 目录，再通过 `expo-sharing` 主动分享；导出前提示包含健康信息。
@@ -477,6 +482,7 @@ repo 写入
 - **组件**：函数组件 + hooks；不引入 UI 框架或新状态库。
 - **文件读取**：DocumentPicker 的文件统一用 `src/ui/components/file.ts`，先 `fetch`，失败再回退 `expo-file-system`。
 - **应用锁**：`AppLockGate` 在后台超过 30 秒后重新锁定；解锁允许系统设备密码回退。
+- **历史记录**：注射 / 口服列表以全部 `treatments` 建立用药线索引；编辑时按原记录的 `lineId` 定位所属方案，停用方案仍可查看和编辑原记录。新登记继续使用当前激活方案。
 
 ## 12. 测试
 
@@ -486,7 +492,7 @@ repo 写入
 - 路径别名 `@` → `src`；
 - `TZ=UTC`，让日期 / 周几断言可重复。
 
-截至 2026-11：**14 个测试文件、144 个用例**（以 `npm test` 实际输出为准）。
+截至 2026-11-03：**18 个测试文件、183 个用例**（以 `npm test` 实际输出为准）。
 
 覆盖范围：
 
@@ -504,13 +510,15 @@ repo 写入
 | `src/data/__tests__/catalog.test.ts` | 目录完整性、负荷方案实际日期 / 剂量 |
 | `src/import/__tests__/*` | JSON Schema、Excel 解析、示例文件、导入时间去重 |
 | `src/export/__tests__/transfer.test.ts` | 换机快照转换、skipped / missed、标签、版本校验 |
+| `src/import/__tests__/integration.test.ts` | 真 SQLite 落库、药物别名、自动建线、预览、重复导入、停用边界、全事务回滚 |
+| `src/export/__tests__/formats.test.ts` | CSV 状态与转义、Excel / JSON 往返、PDF 状态 / 范围 / 转义 / 本地文件写入 |
+| `src/notify/__tests__/*` | 56 天覆盖、14 天口服、免打扰、已打卡抑制、通知上限、失败保留、并发排队、前台续排 |
 
 已知测试缺口：
 
-- `src/import/index.ts` 的落库、药物合并、自动建线、事务与去重没有集成测试；
-- CSV / Excel / JSON / PDF 的列和往返没有单测；
-- 通知排程（免打扰、跨午夜、通知上限）与应用锁没有单测；
-- `src/db/repo.ts` 的 SQL 与不变量主要靠类型检查和人工验证。
+- 应用锁缺少自动化测试，系统生物识别需要设备验证；
+- 通知原生权限、准点投递及厂商后台限制仍需独立安装包和真机长时验证；
+- 除导入涉及的 SQL 外，其余 `src/db/repo.ts` 不变量尚未全部覆盖。
 
 ## 13. 构建与发布
 
@@ -518,7 +526,7 @@ repo 写入
 
 `app.json`：
 
-- 版本 1.1.0，Android package / iOS bundle id 均为 `com.bioclock.app`；
+- 版本 1.1.1，Android package / iOS bundle id 均为 `com.bioclock.app`；
 - Android 权限：`SCHEDULE_EXACT_ALARM`、`USE_BIOMETRIC`、`USE_FINGERPRINT`；
 - 插件：expo-router、expo-splash-screen、expo-notifications、expo-local-authentication；
 - `experiments.typedRoutes`、`reactCompiler`；
@@ -591,7 +599,7 @@ npm run import-template   # 重新生成 Excel 模板
 1. 先在设置页确认「开启提醒」和提醒时间；注射提醒还需要 `reminder_rule`。
 2. 检查系统通知权限；Android 12+ 还要检查「精确闹钟」权限。
 3. 检查是否落在免打扰时段（默认 22:00–08:00），跨日顺延的提醒会被丢弃。
-4. 确认 App 最近 56 天内打开过：排程只在冷启动和写操作后重排，回前台不会自动补排。
+4. 定期打开 App：冷启动、写操作后及从后台回前台时会续排，注射窗口 56 天、口服窗口 14 天。
 5. 单次最多 60 条，注射提醒优先；口服提醒在剩余额度内排。
 
 ### 点击通知没有跳到登记页
@@ -606,8 +614,8 @@ npm run import-template   # 重新生成 Excel 模板
 - 单个数组最多 2000 条；超过请拆分文件。
 - 文件时间必须是本地时间 `YYYY-MM-DD HH:mm`，不存在的日期会被拒绝。
 - 药物按名称 / 通用名 / 商品名匹配；匹配不到会新建自定义药。
-- 普通导入不会把新记录写到已停用线；同药重复可能触发仓库查重，必要时先用换机恢复或恢复用药线。
-- 症状标签、停用状态、疗效事件在事务后补齐，后置步骤失败时可能留下已写入的打卡 / 症状。
+- 普通导入可补录停用时间之前的历史；停用后的新打卡须先恢复用药线，换机恢复保留原始记录。
+- 药物、用药线、打卡、症状、标签、停用状态和疗效事件在同一事务中，失败全部回滚。
 
 ### 选文件后读取失败
 
@@ -617,7 +625,7 @@ npm run import-template   # 重新生成 Excel 模板
 
 - 导出文件写在应用 cache 目录；设备不支持 `expo-sharing` 时会提示从文件管理器导出。
 - 分享 MIME 只识别 `.csv / .pdf / .json / .xlsx`。
-- PDF 使用系统字体，个别定制 ROM 可能显示差异。
+- PDF 使用系统字体，个别定制 ROM 可能显示差异；打印临时文件通过本地 URI 读取后写入应用 cache，避免 Expo Go 的跨目录 File 权限限制。
 
 ### 构建 / 测试失败
 
@@ -638,19 +646,13 @@ npm run import-template   # 重新生成 Excel 模板
 ## 16. 已知限制与技术债
 
 1. **阶段级给药途径未建模**：`medication.route` 是药物级；乌司奴单抗、瑞莎珠单抗等「静脉诱导 + 皮下维持」的提醒会按药物主途径提示。
-2. **CSV / PDF 注射表没有状态列**：skipped / missed 会导出但不可区分；Excel 有状态列。
-3. **稍后提醒未落地**：`snoozeMinutes` 只保存，没有注册通知 action。
-4. **导入后置步骤不在主事务内**：症状标签、停用状态、疗效事件在事务提交后补齐；失败时可能留下已写入的打卡 / 症状。
-5. **已有激活方案时换机只合并**：不重建快照方案结构。
-6. **回前台不自动重排通知**：只在冷启动和写操作后重排，56 天窗口需要用户定期打开 App。
-7. **已停用药线导入的边界**：普通导入会把已停用线排除在匹配集合外，若同药再次导入可能触发仓库查重；需要时使用换机恢复或先恢复用药线。
-8. **测试缺口**：导入落库、导出格式、通知排程、应用锁缺少集成 / 单测。
-9. **`app_lock` 开启条件与运行时回退不完全一致**：设置页要求设备已录入生物识别才允许开启，运行时允许设备密码回退；应用锁是界面锁，不替代系统锁屏。
-10. **目录说明 `note` 字段未渲染**：目录里的「静脉输注，需在医院完成」等说明目前不在选药页展示。
-11. **日历只排注射线**：日历页只展示注射计划，口服计划不在月视图中。
-12. **首次引导只建一条用药线**：联合用药需要在设置的治疗方案编辑器中追加。
-13. **`previewImport` 的疗效事件计数偏乐观**：dry run 时直接取文件条数，可能高于实际匹配到用药线的数量。
-14. **`lineStates` / `efficacyEvents` 的匹配是精确字符串**：按线名或药名精确匹配，不走药名别名；手写文件需要与当前方案中的名称一致。
+2. **稍后提醒未落地**：`snoozeMinutes` 只保存，没有注册通知 action。
+3. **已有激活方案时换机只合并**：不重建快照方案结构。
+4. **测试缺口**：应用锁、原生通知准点投递和部分仓库不变量仍待补充设备 / 自动化测试。
+5. **`app_lock` 开启条件与运行时回退不完全一致**：设置页要求设备已录入生物识别才允许开启，运行时允许设备密码回退；应用锁是界面锁，不替代系统锁屏。
+6. **目录说明 `note` 字段未渲染**：目录里的「静脉输注，需在医院完成」等说明目前不在选药页展示。
+7. **日历只排注射线**：日历页只展示注射计划，口服计划不在月视图中。
+8. **首次引导只建一条用药线**：联合用药需要在设置的治疗方案编辑器中追加。
 
 ## 17. API 明细
 
@@ -715,7 +717,7 @@ treatments.update(id: string, patch: TreatmentPatch): Promise<Treatment>
 treatments.remove(id: string): Promise<void>
 
 efficacyEvents.list(lineId?: string): Promise<EfficacyEvent[]>
-efficacyEvents.create(input: EfficacyEventInput): Promise<EfficacyEvent>
+efficacyEvents.create(input: EfficacyEventInput, transaction?: SQLiteDatabase): Promise<EfficacyEvent>
 efficacyEvents.remove(id: string): Promise<void>
 
 doseLogs.list(lineId?: string): Promise<DoseLog[]>
@@ -1113,7 +1115,7 @@ interface ImportResult {
 约定：
 
 - `previewImport` 与 `importPayload` 共用同一套解析逻辑，前者 `dryRun` 不写库。
-- 导入写库包含药物 / 用药线 / 打卡 / 症状的主事务；标签、停用状态、疗效事件在事务后补齐。
+- 导入在同一事务中写入药物、用药线、打卡、症状、标签、停用状态和疗效事件；疗效事件仓库接收可选的现有事务连接，避免嵌套事务。
 - 换机恢复优先走 `restoreTransferBackup`，它会先建方案、再导入记录、最后恢复设置和提醒。
 - 所有导出文件写入 cache 目录，返回 `{ path, filename }`；分享由 `shareFile` 负责。
 
@@ -1282,8 +1284,8 @@ sequenceDiagram
   U->>Settings: 确认导入
   Settings->>Store: importRecords(payload)
   Store->>Import: importPayload(payload)
-  Import->>DB: 事务：药物 / 用药线 / 打卡 / 症状
-  Import->>DB: 事务后：symptomTag.ensure / lineStates / efficacyEvents
+  Import->>DB: 同一事务：药物 / 用药线 / 打卡 / 症状
+  Import->>DB: 同一事务：symptomTag.ensure / lineStates / efficacyEvents
   Import-->>Store: ImportResult
   Store->>Notify: rescheduleAll()
   Store-->>Settings: result, notifyWarning
@@ -1329,14 +1331,13 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
   autonumber
-  participant Trigger as 冷启动 / 写操作
+  participant Trigger as 冷启动 / 写操作 / 后台回前台
   participant Scheduler as notify/scheduler
   participant Repo as db/repo
   participant Domain as domain/schedule
   participant OS as 系统通知
 
   Trigger->>Scheduler: rescheduleAll()
-  Scheduler->>OS: cancelAllScheduledNotificationsAsync()
   Scheduler->>Repo: getActive + list logs / meds / settings / reminder
   Repo-->>Scheduler: data
   Scheduler->>Domain: collectPlansThrough()
@@ -1345,6 +1346,7 @@ sequenceDiagram
   Scheduler->>Scheduler: buildInjectionDrafts + buildOralDrafts
   Scheduler->>Scheduler: 免打扰顺延 / 去重 / 排序
   Scheduler->>Scheduler: 截取前 60 条（注射优先）
+  Scheduler->>OS: cancelAllScheduledNotificationsAsync()
   loop 每条草稿
     Scheduler->>OS: scheduleNotificationAsync()
   end

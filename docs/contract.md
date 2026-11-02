@@ -718,11 +718,15 @@ export interface DoseLogInput {
 
 - 顶层：`{ format: "bioclock-import", version: 3, medications, injections, oralLogs, symptoms, lineStates, efficacyEvents }`；v1/v2 仍接受。
 - 注射/口服记录按「`lineLabel` → `medication` → 主药/第一条线」解析用药线。
-- `lineStates` 恢复用药线停用时间，`efficacyEvents` 恢复疗效事件；两者按线名/药名匹配当前激活方案。
+- `lineStates` 恢复用药线停用时间，`efficacyEvents` 恢复疗效事件；优先按线名、再按药名别名匹配当前激活方案，支持本次新建的用药线。
 - 药已存在但当前方案没有对应线时自动建线：注射线用该药导入记录的中位间隔（默认 28 天），
   口服线默认每天一次、09:00、长期；首条注射线自动成为主药。
 - 药物按药名 / 通用名 / 商品名 / 内置目录名称互认；命中已有药只补空字段、合并商品名。
 - 去重：打卡按「`takenAt` + `lineId`」，症状按「`loggedAt` + `severity` + 排序后的标签」。
-- `previewImport` 返回 `injections / oralLogs / symptoms / skipped / skippedNoLine / tags / medicationsCreated / linesCreated`，
+- 已停用线仍参与历史打卡匹配与去重；普通导入拒绝停用之后的新打卡，换机恢复保留快照记录。
+- 药物、用药线、打卡、症状、标签、停用状态和疗效事件在同一事务内写入，失败全部回滚。
+  `efficacyEvents.create(input, transaction?)` 可复用调用方的 SQLite 事务连接，未提供时自行创建事务。
+- 疗效事件按「用药线 + 类型 + 发生分钟」去重，预览只计入匹配且未重复的事件。
+- `previewImport` 返回 `injections / oralLogs / symptoms / skipped / skippedNoLine / tags / medicationsCreated / linesCreated / efficacyEvents`，
   确认框据此提示将新建几条用药线。
 - 完整字段见 [`docs/import-format.md`](./import-format.md)。
