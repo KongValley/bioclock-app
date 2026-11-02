@@ -73,42 +73,6 @@ export interface DiseaseDrug {
   regimen: RegimenTemplate
 }
 
-export interface RegimenPhase {
-  id: string
-  regimenId: string
-  orderIdx: number
-  kind: PhaseKind
-  intervalDays: number
-  repeatCount: number
-  dose: number | null
-  unit: string
-}
-
-export interface Regimen {
-  id: string
-  medicationId: string
-  name: string
-  anchor: RegimenAnchor
-  windowDays: number
-  isActive: boolean
-  createdAt: number
-  phases: RegimenPhase[]
-}
-
-export interface Injection {
-  id: string
-  regimenId: string
-  medicationId: string
-  injectedAt: number
-  dose: number | null
-  unit: string
-  site: InjectionSite
-  lotNumber: string | null
-  note: string | null
-  createdAt: number
-  updatedAt: number
-}
-
 export interface SymptomLog {
   id: string
   loggedAt: number
@@ -130,20 +94,10 @@ export interface SymptomTag {
   createdAt: number
 }
 
-export interface ReminderRule {
-  id: string
-  regimenId: string
-  offsets: number[]        // 相对注射日提前的天数，如 [-2, -1, 0]
-  timeOfDay: string        // 'HH:mm'
-  snoozeMinutes: number
-  enabled: boolean
-}
-
 export type AppSettings = Record<string, string>
 
 // ---------------------------------------------------------------------------
 // v5：治疗方案模型（treatment / treatment_line / treatment_phase / dose_log）
-// 上面的 Regimen / Injection 等是 v4 及之前的旧类型，等待统一清理，暂不删除。
 // ---------------------------------------------------------------------------
 
 export type LineKind = 'injection' | 'oral'

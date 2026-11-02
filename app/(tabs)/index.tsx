@@ -8,7 +8,7 @@ import { buildSchedule, selectNextPlan, type SchedulePlan } from '@/domain/sched
 import { recommendSite, SITE_LABELS } from '@/domain/rotation'
 import { NOTIFY_PREP_HINT } from '@/notify/scheduler'
 import type { DoseLogInput } from '@/db/repo'
-import type { DoseStatus, Injection, InjectionSite, Medication, TreatmentLine } from '@/types'
+import type { DoseStatus, InjectionSite, Medication, TreatmentLine } from '@/types'
 import { Button } from '@/ui/components/Button'
 import { Card } from '@/ui/components/Card'
 import { Icon } from '@/ui/components/Icon'
@@ -142,7 +142,7 @@ export default function TodayScreen() {
         site: log.site as InjectionSite,
         injectedAt: log.takenAt ?? log.scheduledAt ?? log.createdAt,
       }))
-    return recommendSite(history as Injection[])
+    return recommendSite(history)
   }, [hostLine, medicationById, doseLogs])
 
   const openInjection = (lineId?: string) => {

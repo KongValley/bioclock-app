@@ -1,4 +1,10 @@
-import type { Injection, InjectionSite } from '@/types'
+import type { InjectionSite } from '@/types'
+
+/** 部位轮换只需要「位点 + 时间」，与具体记录模型解耦。 */
+export interface SiteHistoryEntry {
+  site: InjectionSite
+  injectedAt: number
+}
 
 /** 8 个皮下注射位点的中文标签 */
 export const SITE_LABELS: Record<InjectionSite, string> = {
@@ -45,7 +51,7 @@ const ABDOMEN_SITES: InjectionSite[] = [
 ]
 
 /** 统计每个位点的历史使用次数 */
-export function siteUsage(injections: Injection[]): Record<InjectionSite, number> {
+export function siteUsage(injections: SiteHistoryEntry[]): Record<InjectionSite, number> {
   const usage: Record<InjectionSite, number> = {
     abdomen_ul: 0,
     abdomen_ur: 0,
@@ -70,7 +76,7 @@ export function siteUsage(injections: Injection[]): Record<InjectionSite, number
  * 4. 仍同分时（默认）腹部优先
  */
 export function recommendSite(
-  injections: Injection[],
+  injections: SiteHistoryEntry[],
   opts?: { preferAbdomen?: boolean },
 ): InjectionSite {
   if (injections.length === 0) return 'abdomen_ul'

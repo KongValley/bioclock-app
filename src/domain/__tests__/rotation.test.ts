@@ -1,27 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import type { Injection, InjectionSite } from '@/types'
-import { ALL_SITES, SITE_LABELS, recommendSite, siteUsage } from '../rotation'
+import type { InjectionSite } from '@/types'
+import {
+  ALL_SITES,
+  SITE_LABELS,
+  recommendSite,
+  siteUsage,
+  type SiteHistoryEntry,
+} from '../rotation'
 
 const DAY = 86_400_000
 const T0 = Date.UTC(2026, 0, 1, 9, 0, 0)
 
-let injectionSeq = 0
-
-function makeInjection(offsetDays: number, site: InjectionSite): Injection {
-  injectionSeq += 1
-  const injectedAt = T0 + offsetDays * DAY
+function makeInjection(offsetDays: number, site: InjectionSite): SiteHistoryEntry {
   return {
-    id: `inj-${injectionSeq}`,
-    regimenId: 'regimen-1',
-    medicationId: 'med-1',
-    injectedAt,
-    dose: 40,
-    unit: 'mg',
     site,
-    lotNumber: null,
-    note: null,
-    createdAt: injectedAt,
-    updatedAt: injectedAt,
+    injectedAt: T0 + offsetDays * DAY,
   }
 }
 

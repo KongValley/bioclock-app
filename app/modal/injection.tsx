@@ -17,7 +17,7 @@ import { useAppStore, errorMessage } from '@/store/app'
 import { buildSchedule, selectNextPlan } from '@/domain/schedule'
 import { recommendSite } from '@/domain/rotation'
 import type { DoseLogInput } from '@/db/repo'
-import type { Injection, InjectionSite, Medication } from '@/types'
+import type { InjectionSite, Medication } from '@/types'
 import { TextField } from '@/ui/components/Field'
 import { DateTimeField } from '@/ui/components/TimeField'
 import { SitePicker } from '@/ui/components/SitePicker'
@@ -111,7 +111,7 @@ export default function InjectionModal() {
         })),
     [doseLogs],
   )
-  const recommended = useMemo(() => recommendSite(siteHistory as Injection[]), [siteHistory])
+  const recommended = useMemo(() => recommendSite(siteHistory), [siteHistory])
 
   const nextPlanFor = (targetLineId: string) => {
     if (!treatment) return null
